@@ -1,5 +1,6 @@
 package helio.module
 
+import helio.module.FeatureData.Class
 import io.github.classgraph.AnnotationClassRef
 import io.github.classgraph.ClassGraph
 import net.bladehunt.kotstom.GlobalEventHandler
@@ -98,7 +99,7 @@ sealed class FeatureDefinition<ID_TYPE : Comparable<ID_TYPE>, DATA : FeatureData
 }
 
 /**
- * Data for a feature of a system. Each [FeatureData] has its own Exposed [Table].
+ * Data for a feature of a system. Each [FeatureData] has its own Exposed [Table]. All subclasses must have a companion object that extends [Class].
  */
 sealed class FeatureData<T : Comparable<T>>(id: EntityID<T>) : Entity<T>(id) {
     /**

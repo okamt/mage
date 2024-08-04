@@ -14,6 +14,9 @@ import org.jetbrains.exposed.sql.SchemaUtils
 import org.jetbrains.exposed.sql.transactions.transaction
 import java.util.*
 
+/**
+ * The instances module.
+ */
 object Instances : ServerModule("instances"), FeatureRegistry<InstanceDefinition<*>> {
     private val map: MutableMap<String, InstanceDefinition<*>> = mutableMapOf()
 
@@ -39,17 +42,19 @@ abstract class InstanceData(id: EntityID<UUID>) : FeatureData<UUID>(id) {
 abstract class InstanceDefinition<DATA : InstanceData>(
     dataClass: InstanceData.Class<DATA>,
 ) : FeatureDefinition<UUID, DATA>(dataClass) {
-    val chunkLoader: IChunkLoader? = null
-
-    abstract val dimensionType: DimensionType
-    internal lateinit var dimensionTypeKey: DynamicRegistry.Key<DimensionType>
+    open val chunkLoader: IChunkLoader? = null
+    open val dimensionType: DimensionType? = null
+    open var dimensionTypeKey: DynamicRegistry.Key<DimensionType> = DimensionType.OVERWORLD
     val instanceContainers = mutableListOf<InstanceContainer>()
     open val defaultSpawnPoint: Pos = Pos.ZERO
 
     open fun onCreateInstanceContainer(instanceContainer: InstanceContainer): InstanceContainer = instanceContainer
 
     internal fun registerDimension() {
-        dimensionTypeKey = DimensionTypeRegistry.register(id.lowercase(), dimensionType)
+        val dimensionType = dimensionType
+        if (dimensionType != null) {
+            dimensionTypeKey = DimensionTypeRegistry.register(id.lowercase(), dimensionType)
+        }
     }
 
     @Suppress("UnstableApiUsage")
