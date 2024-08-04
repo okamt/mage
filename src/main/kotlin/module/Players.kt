@@ -10,6 +10,11 @@ import org.jetbrains.exposed.sql.SchemaUtils
 import org.jetbrains.exposed.sql.transactions.transaction
 import java.util.*
 
+/**
+ * The players module.
+ *
+ * When registered, Minestom will use the [PlayerWrapper] class for players. Can be accessed via [Player.wrapper].
+ */
 object Players : ServerModule("players"), FeatureRegistry<PlayerDataDefinition<*>> {
     private val map: MutableMap<String, PlayerDataDefinition<*>> = mutableMapOf()
 

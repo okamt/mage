@@ -18,6 +18,11 @@ import org.jetbrains.exposed.sql.transactions.transaction
 val ITEM_ID_TAG = Tag.String("itemId")
 val ITEM_DATA_ID_TAG = Tag.Integer("itemDataId")
 
+/**
+ * The items module.
+ *
+ * Handles delegating events to the appropriate [ItemDefinition]s.
+ */
 object Items : ServerModule("items"), FeatureRegistry<ItemDefinition<*>> {
     private val map: MutableMap<String, ItemDefinition<*>> = mutableMapOf()
 
@@ -35,8 +40,8 @@ object Items : ServerModule("items"), FeatureRegistry<ItemDefinition<*>> {
 
     fun getItemDefinition(itemStack: ItemStack): ItemDefinition<*> {
         val itemId = itemStack.getTag(ITEM_ID_TAG)
-        return getItemDefinition(itemId)
-            ?: throw Exception("ItemStack $itemStack has invalid ItemDefinition id $itemId")
+        requireNotNull(itemId) { "ItemStack $itemStack has no ItemDefinition." }
+        return requireNotNull(getItemDefinition(itemId)) { "ItemStack $itemStack has invalid ItemDefinition id $itemId." }
     }
 
     override fun onRegisterModule() {
@@ -78,7 +83,7 @@ abstract class ItemDefinition<DATA : ItemData>(
     fun getData(itemStack: ItemStack): DATA {
         val itemDataId = itemStack.getTag(ITEM_DATA_ID_TAG)
         return transaction { data.findById(itemDataId) }
-            ?: error("ItemStack $itemStack has no associated ItemData for ItemDefinition $id")
+            ?: error("ItemStack $itemStack has no associated ItemData for ItemDefinition $id.")
     }
 
     @Suppress("UnstableApiUsage")
