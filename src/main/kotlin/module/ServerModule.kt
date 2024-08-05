@@ -69,15 +69,29 @@ abstract class ServerModule(val id: String) {
 /**
  * Definition of a feature of a system.
  *
- * @param data The companion object of the [FeatureData] (which should be a [FeatureDataClass]).
+ * @param data The companion object of the [FeatureData] (which should be a [FeatureData.Class]).
  */
 sealed class FeatureDefinition<ID_TYPE : Comparable<ID_TYPE>, DATA : FeatureData<ID_TYPE>>(
-    val data: FeatureData.Class<ID_TYPE, DATA>
+    val data: Class<ID_TYPE, DATA>
 ) {
+    @JvmInline
+    value class Id(val value: String) {
+        companion object {
+            /**
+             * Max length of a [FeatureDefinition.id]. For database.
+             */
+            const val MAX_LEN = 50
+        }
+
+        init {
+            require(value.length <= MAX_LEN) { "FeatureDefinition id $value must be $MAX_LEN characters long or less." }
+        }
+    }
+
     /**
      * Human-readable ID of a [FeatureDefinition]. Should be unique within its system.
      */
-    abstract val id: String
+    abstract val id: Id
 
     fun getDataOrNew(
         id: ID_TYPE,
@@ -116,11 +130,19 @@ sealed class FeatureData<T : Comparable<T>>(id: EntityID<T>) : Entity<T>(id) {
     val clazz = this::class.companionObjectInstance as Class<*, *>
 }
 
+val defIdsRegistered = mutableSetOf<FeatureDefinition.Id>()
+
 /**
  * Registry for [FeatureDefinition]s.
  */
 sealed interface FeatureRegistry<DEF : FeatureDefinition<*, *>> {
-    fun register(definition: DEF)
+    fun onRegister(definition: DEF)
+}
+
+fun <DEF : FeatureDefinition<*, *>> FeatureRegistry<DEF>.register(definition: DEF) {
+    require(definition.id !in defIdsRegistered) { "Already registered a FeatureDefinition with id ${definition.id}." }
+    defIdsRegistered.add(definition.id)
+    onRegister(definition)
 }
 
 /**

@@ -1,4 +1,4 @@
-package helio.module.integrations
+package helio.module.integration
 
 import helio.module.*
 import helio.util.addListener
@@ -10,6 +10,11 @@ import org.jetbrains.exposed.dao.id.EntityID
 import org.jetbrains.exposed.dao.id.UUIDTable
 import java.util.*
 
+/**
+ * The player instances module.
+ *
+ * Handles storage of the player's position and instance.
+ */
 object PlayerInstances : ServerModule("playerInstances") {
     lateinit var defaultInstance: InstanceDefinition<*>
 
@@ -39,8 +44,8 @@ object PlayerInstances : ServerModule("playerInstances") {
 
 @RegisterFeature(Players::class)
 object PlayerInstance : PlayerDataDefinition<PlayerInstance.Data>(Data) {
-    const val ID = "instance"
-    override val id = ID
+    const val ID = "playerInstance"
+    override val id = Id(ID)
 
     class Data(id: EntityID<UUID>) : PlayerData(id) {
         companion object : Class<Data>(Table)
