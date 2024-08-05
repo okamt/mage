@@ -18,9 +18,9 @@ import java.util.*
  * The instances module.
  */
 object Instances : ServerModule("instances"), FeatureRegistry<InstanceDefinition<*>> {
-    private val map: MutableMap<String, InstanceDefinition<*>> = mutableMapOf()
+    private val map: MutableMap<FeatureDefinition.Id, InstanceDefinition<*>> = mutableMapOf()
 
-    override fun register(definition: InstanceDefinition<*>) {
+    override fun onRegister(definition: InstanceDefinition<*>) {
         map[definition.id] = definition
 
         transaction {
@@ -53,7 +53,7 @@ abstract class InstanceDefinition<DATA : InstanceData>(
     internal fun registerDimension() {
         val dimensionType = dimensionType
         if (dimensionType != null) {
-            dimensionTypeKey = DimensionTypeRegistry.register(id.lowercase(), dimensionType)
+            dimensionTypeKey = DimensionTypeRegistry.register(id.value.lowercase(), dimensionType)
         }
     }
 

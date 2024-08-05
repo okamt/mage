@@ -7,15 +7,16 @@ import org.jetbrains.exposed.sql.Table
 /**
  * A [CustomColumn] that stores a [Pos].
  */
-class PosColumn(table: Table, id: String) : CustomColumn<PosColumn, PosColumn.Accessor>() {
-    class Accessor(parent: PosColumn, entity: Entity<*>) : CustomColumn.Accessor<Accessor, PosColumn>(parent, entity) {
+class PosColumn(table: Table, id: String) : CustomColumn<PosColumn, PosColumn.Accessor>(table, id) {
+    class Accessor(parent: PosColumn, entity: Entity<*>) :
+        CustomColumn.Accessor<Accessor, PosColumn, Pos>(parent, entity) {
         var x by delegate(parent.x)
         var y by delegate(parent.y)
         var z by delegate(parent.z)
         var yaw by delegate(parent.yaw)
         var pitch by delegate(parent.pitch)
 
-        var value: Pos
+        override var value: Pos
             get() = Pos(x, y, z, yaw, pitch)
             set(value) {
                 x = value.x

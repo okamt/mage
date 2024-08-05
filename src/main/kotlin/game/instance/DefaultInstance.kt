@@ -15,7 +15,7 @@ import java.util.*
 @RegisterFeature(Instances::class)
 object DefaultInstance : InstanceDefinition<DefaultInstance.Data>(Data) {
     const val ID = "defaultInstance"
-    override val id = ID
+    override val id = Id(ID)
 
     override val dimensionType = DimensionType.builder().ambientLight(1f).build()
     override val defaultSpawnPoint = Pos(0.0, 42.0, 0.0)

@@ -12,7 +12,10 @@ import kotlin.reflect.KProperty
  *
  * @sample [ExampleCustomColumn]
  */
-abstract class CustomColumn<SELF : CustomColumn<SELF, ACCESSOR>, ACCESSOR : CustomColumn.Accessor<ACCESSOR, SELF>> {
+abstract class CustomColumn<SELF : CustomColumn<SELF, ACCESSOR>, ACCESSOR : CustomColumn.Accessor<ACCESSOR, SELF, *>>(
+    val table: Table,
+    val id: String,
+) {
     @Suppress("UNCHECKED_CAST")
     private val self
         get() = this as SELF
@@ -20,7 +23,7 @@ abstract class CustomColumn<SELF : CustomColumn<SELF, ACCESSOR>, ACCESSOR : Cust
     /**
      * Accessor for a given [entity] to access the value(s) of a [CustomColumn] ([parent]).
      */
-    abstract class Accessor<SELF : Accessor<SELF, PARENT>, PARENT : CustomColumn<PARENT, SELF>>(
+    abstract class Accessor<SELF : Accessor<SELF, PARENT, VALUE>, PARENT : CustomColumn<PARENT, SELF>, VALUE>(
         val parent: PARENT,
         val entity: Entity<*>
     ) {
@@ -30,6 +33,8 @@ abstract class CustomColumn<SELF : CustomColumn<SELF, ACCESSOR>, ACCESSOR : Cust
          * @sample [ExampleCustomColumn.Accessor]
          */
         fun <T> delegate(column: Column<T>) = entity.columnDelegate(column)
+
+        abstract var value: VALUE
     }
 
     /**
@@ -63,11 +68,14 @@ class EntityColumnDelegate<ID : Comparable<ID>, T>(private val entity: Entity<ID
 fun <ID : Comparable<ID>, T> Entity<ID>.columnDelegate(column: Column<T>): EntityColumnDelegate<ID, T> =
     EntityColumnDelegate(this, column)
 
-private class ExampleCustomColumn(table: Table) : CustomColumn<ExampleCustomColumn, ExampleCustomColumn.Accessor>() {
+private class ExampleCustomColumn(table: Table, id: String) :
+    CustomColumn<ExampleCustomColumn, ExampleCustomColumn.Accessor>(table, id) {
     class Accessor(parent: ExampleCustomColumn, entity: Entity<*>) :
-        CustomColumn.Accessor<Accessor, ExampleCustomColumn>(parent, entity) {
+        CustomColumn.Accessor<Accessor, ExampleCustomColumn, Any>(parent, entity) {
         var testColumn1 by delegate(parent.testColumn1)
         var testColumn2 by delegate(parent.testColumn2)
+
+        override var value: Any = 1
     }
 
     override val accessor = ::Accessor

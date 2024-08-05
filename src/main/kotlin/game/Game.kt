@@ -2,13 +2,14 @@ package helio.game
 
 import helio.game.instance.DefaultInstance
 import helio.game.item.ItemSquirter
-import helio.module.integrations.PlayerInstances
+import helio.module.integration.PlayerInstances
 import helio.module.registerAllAnnotatedFeatures
 import helio.module.registerAllBuiltinModules
 import helio.util.addListener
 import net.bladehunt.kotstom.GlobalEventHandler
 import net.minestom.server.MinecraftServer
 import net.minestom.server.entity.GameMode
+import net.minestom.server.event.EventNode
 import net.minestom.server.event.player.PlayerSpawnEvent
 import net.minestom.server.extras.MojangAuth
 import org.jetbrains.exposed.sql.Database
@@ -22,7 +23,16 @@ fun start() {
 
     MojangAuth.init()
 
-    GlobalEventHandler.addListener(PlayerSpawnEvent::class) {
+    PlayerInstances.defaultInstance = DefaultInstance
+
+    registerAllBuiltinModules()
+    registerAllAnnotatedFeatures(Game.javaClass.packageName)
+
+    val global = EventNode.all("global")
+    global.priority = 10 // Run after the builtin event handlers
+
+    global.addListener(PlayerSpawnEvent::class) {
+        if (!isFirstSpawn) return@addListener
         player.inventory.addItemStack(ItemSquirter.createItemStack())
         player.gameMode = GameMode.ADVENTURE
         /*player.inventory.addItemStack(
@@ -38,10 +48,7 @@ fun start() {
         )*/
     }
 
-    PlayerInstances.defaultInstance = DefaultInstance
-
-    registerAllBuiltinModules()
-    registerAllAnnotatedFeatures(Game.javaClass.packageName)
+    GlobalEventHandler.addChild(global)
 
     minecraftServer.start(config.address, config.port)
 }

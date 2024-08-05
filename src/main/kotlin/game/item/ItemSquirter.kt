@@ -14,7 +14,7 @@ import org.jetbrains.exposed.sql.transactions.transaction
 @RegisterFeature(Items::class)
 object ItemSquirter : ItemDefinition<ItemSquirter.Data>(Data) {
     const val ID = "squirter"
-    override val id = ID
+    override val id = Id(ID)
     override val material: Material = Material.REPEATER
 
     class Data(id: EntityID<Int>) : ItemData(id) {

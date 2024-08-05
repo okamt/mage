@@ -2,7 +2,6 @@ package helio.module
 
 import net.bladehunt.kotstom.ConnectionManager
 import net.minestom.server.entity.Player
-import net.minestom.server.event.player.PlayerDisconnectEvent
 import net.minestom.server.network.player.PlayerConnection
 import org.jetbrains.exposed.dao.id.EntityID
 import org.jetbrains.exposed.dao.id.IdTable
@@ -16,9 +15,9 @@ import java.util.*
  * When registered, Minestom will use the [PlayerWrapper] class for players. Can be accessed via [Player.wrapper].
  */
 object Players : ServerModule("players"), FeatureRegistry<PlayerDataDefinition<*>> {
-    private val map: MutableMap<String, PlayerDataDefinition<*>> = mutableMapOf()
+    private val map: MutableMap<FeatureDefinition.Id, PlayerDataDefinition<*>> = mutableMapOf()
 
-    override fun register(definition: PlayerDataDefinition<*>) {
+    override fun onRegister(definition: PlayerDataDefinition<*>) {
         map[definition.id] = definition
 
         transaction {
@@ -26,16 +25,12 @@ object Players : ServerModule("players"), FeatureRegistry<PlayerDataDefinition<*
         }
     }
 
-    fun getPlayerDataDefinition(id: String): PlayerDataDefinition<*>? {
+    fun getPlayerDataDefinition(id: FeatureDefinition.Id): PlayerDataDefinition<*>? {
         return map[id]
     }
 
     override fun onRegisterModule() {
         ConnectionManager.setPlayerProvider(::PlayerWrapper)
-
-        eventNode.addListener(PlayerDisconnectEvent::class.java) { event ->
-            event.player.wrapper.save()
-        }
     }
 }
 
@@ -44,9 +39,6 @@ class PlayerWrapper(
     username: String,
     playerConnection: PlayerConnection,
 ) : Player(uuid, username, playerConnection) {
-    fun save() {
-        TODO("Player data saving")
-    }
 }
 
 val Player.wrapper

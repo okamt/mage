@@ -15,7 +15,7 @@ import org.jetbrains.exposed.dao.id.IdTable
 import org.jetbrains.exposed.sql.SchemaUtils
 import org.jetbrains.exposed.sql.transactions.transaction
 
-val ITEM_ID_TAG = Tag.String("itemId")
+val ITEM_DEF_ID_TAG = Tag.String("itemId")
 val ITEM_DATA_ID_TAG = Tag.Integer("itemDataId")
 
 /**
@@ -24,9 +24,9 @@ val ITEM_DATA_ID_TAG = Tag.Integer("itemDataId")
  * Handles delegating events to the appropriate [ItemDefinition]s.
  */
 object Items : ServerModule("items"), FeatureRegistry<ItemDefinition<*>> {
-    private val map: MutableMap<String, ItemDefinition<*>> = mutableMapOf()
+    private val map: MutableMap<FeatureDefinition.Id, ItemDefinition<*>> = mutableMapOf()
 
-    override fun register(definition: ItemDefinition<*>) {
+    override fun onRegister(definition: ItemDefinition<*>) {
         map[definition.id] = definition
 
         transaction {
@@ -34,14 +34,12 @@ object Items : ServerModule("items"), FeatureRegistry<ItemDefinition<*>> {
         }
     }
 
-    fun getItemDefinition(id: String): ItemDefinition<*>? {
-        return map[id]
-    }
+    fun getItemDefinition(id: FeatureDefinition.Id): ItemDefinition<*>? = map[id]
 
     fun getItemDefinition(itemStack: ItemStack): ItemDefinition<*> {
-        val itemId = itemStack.getTag(ITEM_ID_TAG)
-        requireNotNull(itemId) { "ItemStack $itemStack has no ItemDefinition." }
-        return requireNotNull(getItemDefinition(itemId)) { "ItemStack $itemStack has invalid ItemDefinition id $itemId." }
+        val itemDefId =
+            FeatureDefinition.Id(requireNotNull(itemStack.getTag(ITEM_DEF_ID_TAG)) { "ItemStack $itemStack has no ItemDefinition." })
+        return requireNotNull(getItemDefinition(itemDefId)) { "ItemStack $itemStack has invalid ItemDefinition id $itemDefId." }
     }
 
     override fun onRegisterModule() {
@@ -50,15 +48,17 @@ object Items : ServerModule("items"), FeatureRegistry<ItemDefinition<*>> {
     }
 }
 
-abstract class ItemData(id: EntityID<Int>) : FeatureData<Int>(id) {
+typealias ItemDataId = Int
+
+abstract class ItemData(id: EntityID<ItemDataId>) : FeatureData<ItemDataId>(id) {
     abstract class Class<DATA : ItemData>(
-        table: IdTable<Int>,
-    ) : FeatureData.Class<Int, DATA>(table)
+        table: IdTable<ItemDataId>,
+    ) : FeatureData.Class<ItemDataId, DATA>(table)
 }
 
 abstract class ItemDefinition<DATA : ItemData>(
     dataClass: ItemData.Class<DATA>,
-) : FeatureDefinition<Int, DATA>(dataClass) {
+) : FeatureDefinition<ItemDataId, DATA>(dataClass) {
     abstract val material: Material
 
     internal fun delegateEvent(event: Event) {
@@ -87,16 +87,18 @@ abstract class ItemDefinition<DATA : ItemData>(
     }
 
     @Suppress("UnstableApiUsage")
-    fun createItemStack(): ItemStack {
+    fun createItemStack(withData: DATA? = null): ItemStack {
         var itemStack = ItemStack.AIR
 
         transaction {
-            val itemData = data.new {}
+            val itemData = withData ?: data.new {}
 
             itemStack = ItemStack
                 .of(material, DataComponentMap.EMPTY)
-                .withCustomName(Component.translatable(this@ItemDefinition.id).decoration(TextDecoration.ITALIC, false))
-                .withTag(ITEM_ID_TAG, this@ItemDefinition.id)
+                .withCustomName(
+                    Component.translatable(this@ItemDefinition.id.value).decoration(TextDecoration.ITALIC, false)
+                )
+                .withTag(ITEM_DEF_ID_TAG, this@ItemDefinition.id.value)
                 .withTag(ITEM_DATA_ID_TAG, itemData.id.value)
 
             itemStack = onCreateItemStack(itemStack, itemData)
@@ -108,3 +110,36 @@ abstract class ItemDefinition<DATA : ItemData>(
 
 val ItemStack.itemDef: ItemDefinition<*>
     get() = Items.getItemDefinition(this)
+
+/**
+ * Small representation of an [ItemStack].
+ */
+data class ItemRepr(
+    val itemDefId: FeatureDefinition.Id,
+    val itemDataId: ItemDataId,
+) {
+    val itemDef by lazy {
+        requireNotNull(Items.getItemDefinition(itemDefId)) { "ItemRepr has invalid ItemDefinition id $itemDefId." }
+    }
+
+    val itemData by lazy {
+        requireNotNull(itemDef.getData(itemDataId)) { "ItemRepr has invalid ItemData id $itemDataId for ItemDefinition $itemDefId." }
+    }
+
+    fun createItemStack(): ItemStack =
+        /**
+         * We know that itemData is of type DATA (in ItemDefinition<DATA>) because we got it from calling itemDef.getData
+         * which always returns DATA?, so calling createItemStack with itemData here is safe.
+         *
+         * Doing this without reflection is very difficult.
+         */
+        itemDef::createItemStack.call(itemData)
+}
+
+val ItemStack.itemRepr: ItemRepr
+    get() {
+        val itemDefId = requireNotNull(getTag(ITEM_DEF_ID_TAG)) { "ItemStack $this has no ItemDefinition." }
+        val itemDataId =
+            requireNotNull(getTag(ITEM_DATA_ID_TAG)) { "ItemStack $this has no ItemData for ItemDefinition $itemDefId." }
+        return ItemRepr(FeatureDefinition.Id(itemDefId), itemDataId)
+    }
