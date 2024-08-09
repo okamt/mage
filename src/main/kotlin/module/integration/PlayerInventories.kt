@@ -18,6 +18,7 @@ const val PLAYER_INVENTORY_SIZE = 46
  *
  * Handles storage of the player's inventory.
  */
+@BuiltinModule(BuiltinModuleType.INTEGRATION)
 object PlayerInventories : ServerModule("playerInventories") {
     override fun onRegisterModule() {
         eventNode.addListener(PlayerSpawnEvent::class) {

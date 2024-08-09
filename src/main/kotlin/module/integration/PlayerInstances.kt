@@ -15,6 +15,7 @@ import java.util.*
  *
  * Handles storage of the player's position and instance.
  */
+@BuiltinModule(BuiltinModuleType.INTEGRATION)
 object PlayerInstances : ServerModule("playerInstances") {
     lateinit var defaultInstance: InstanceDefinition<*>
 

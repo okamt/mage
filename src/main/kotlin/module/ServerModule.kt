@@ -1,6 +1,7 @@
 package helio.module
 
 import helio.module.FeatureData.Class
+import helio.util.enumSetOfAll
 import io.github.classgraph.AnnotationClassRef
 import io.github.classgraph.ClassGraph
 import net.bladehunt.kotstom.GlobalEventHandler
@@ -12,24 +13,40 @@ import org.jetbrains.exposed.dao.id.IdTable
 import org.jetbrains.exposed.sql.Table
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.tinylog.kotlin.Logger
+import java.util.*
 import kotlin.reflect.KClass
 import kotlin.reflect.full.companionObjectInstance
+import kotlin.reflect.full.findAnnotation
 
 private var registeredAllModules = false
 private val registeredModules = mutableListOf<ServerModule>()
+
+enum class BuiltinModuleType {
+    CORE,
+    INTEGRATION,
+}
+
+annotation class BuiltinModule(val type: BuiltinModuleType)
 
 /**
  * Calls [ServerModule.registerModule] for every builtin [ServerModule] and processes all [FeatureDefinition] annotations in the [ServerModule] package.
  *
  * @throws IllegalStateException if called more than once.
  */
-fun registerAllBuiltinModules() {
+fun registerAllBuiltinModules(filter: EnumSet<BuiltinModuleType> = enumSetOfAll()) {
     check(!registeredAllModules) { "Already registered all modules." }
 
     ClassGraph().enableClassInfo().enableAnnotationInfo().acceptPackages(ServerModule::class.java.packageName)
         .scan().getSubclasses(ServerModule::class.java).forEach {
-            val obj = it.loadClass().kotlin.objectInstance
+            val clazz = it.loadClass().kotlin
+            val obj = clazz.objectInstance
             require(obj != null) { "ServerModule class ${it.name} should be an object." }
+            val builtinModuleAnnotation = clazz.findAnnotation<BuiltinModule>()
+            if (builtinModuleAnnotation != null) {
+                if (builtinModuleAnnotation.type !in filter) {
+                    return@forEach
+                }
+            }
             registerModule(obj as ServerModule)
         }
 

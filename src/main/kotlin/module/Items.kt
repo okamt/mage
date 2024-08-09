@@ -27,6 +27,7 @@ val ITEM_DATA_ID_TAG = Tag.Integer("itemDataId")
  *
  * Handles delegating events to the appropriate [ItemDefinition]s.
  */
+@BuiltinModule(BuiltinModuleType.CORE)
 object Items : ServerModule("items"), FeatureRegistry<ItemDefinition<*>> {
     private val map: MutableMap<FeatureDefinition.Id, ItemDefinition<*>> = mutableMapOf()
 

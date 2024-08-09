@@ -17,6 +17,7 @@ import java.util.*
 /**
  * The instances module.
  */
+@BuiltinModule(BuiltinModuleType.CORE)
 object Instances : ServerModule("instances"), FeatureRegistry<InstanceDefinition<*>> {
     private val map: MutableMap<FeatureDefinition.Id, InstanceDefinition<*>> = mutableMapOf()
 

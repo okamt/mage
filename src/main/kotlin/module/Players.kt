@@ -14,6 +14,7 @@ import java.util.*
  *
  * When registered, Minestom will use the [PlayerWrapper] class for players. Can be accessed via [Player.wrapper].
  */
+@BuiltinModule(BuiltinModuleType.CORE)
 object Players : ServerModule("players"), FeatureRegistry<PlayerDataDefinition<*>> {
     private val map: MutableMap<FeatureDefinition.Id, PlayerDataDefinition<*>> = mutableMapOf()
 
