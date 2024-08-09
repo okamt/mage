@@ -28,10 +28,13 @@ fun start() {
     registerAllBuiltinModules()
     registerAllAnnotatedFeatures(Game.javaClass.packageName)
 
-    val global = EventNode.all("global")
-    global.priority = 10 // Run after the builtin event handlers
+    val before = EventNode.all("before")
+    before.priority = -10
 
-    global.addListener(PlayerSpawnEvent::class) {
+    val after = EventNode.all("after")
+    after.priority = 10
+
+    after.addListener(PlayerSpawnEvent::class) {
         if (!isFirstSpawn) return@addListener
         player.inventory.addItemStack(ItemSquirter.createItemStack())
         player.gameMode = GameMode.ADVENTURE
@@ -48,7 +51,8 @@ fun start() {
         )*/
     }
 
-    GlobalEventHandler.addChild(global)
+    GlobalEventHandler.addChild(before)
+    GlobalEventHandler.addChild(after)
 
     minecraftServer.start(config.address, config.port)
 }
