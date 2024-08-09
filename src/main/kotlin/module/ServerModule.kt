@@ -30,9 +30,7 @@ fun registerAllBuiltinModules() {
         .scan().getSubclasses(ServerModule::class.java).forEach {
             val obj = it.loadClass().kotlin.objectInstance
             require(obj != null) { "ServerModule class ${it.name} should be an object." }
-            val serverModule = obj as ServerModule
-            serverModule.registerModule()
-            registeredModules.add(serverModule)
+            registerModule(obj as ServerModule)
         }
 
     registerAllAnnotatedFeatures(ServerModule::class.java.packageName)
@@ -47,7 +45,6 @@ fun registerAllBuiltinModules() {
  */
 fun registerModule(serverModule: ServerModule) {
     check(serverModule !in registeredModules) { "Already registered module $serverModule." }
-
     serverModule.registerModule()
     registeredModules.add(serverModule)
 }
@@ -71,7 +68,7 @@ abstract class ServerModule(val id: String) {
  *
  * @param data The companion object of the [FeatureData] (which should be a [FeatureData.Class]).
  */
-sealed class FeatureDefinition<ID_TYPE : Comparable<ID_TYPE>, DATA : FeatureData<ID_TYPE>>(
+abstract class FeatureDefinition<ID_TYPE : Comparable<ID_TYPE>, DATA : FeatureData<ID_TYPE>>(
     val data: Class<ID_TYPE, DATA>
 ) {
     @JvmInline
@@ -115,13 +112,13 @@ sealed class FeatureDefinition<ID_TYPE : Comparable<ID_TYPE>, DATA : FeatureData
 /**
  * Data for a feature of a system. Each [FeatureData] has its own Exposed [Table]. All subclasses must have a companion object that extends [Class].
  */
-sealed class FeatureData<T : Comparable<T>>(id: EntityID<T>) : Entity<T>(id) {
+abstract class FeatureData<T : Comparable<T>>(id: EntityID<T>) : Entity<T>(id) {
     /**
      * The companion object of a [FeatureData].
      *
      * @param table The [Table] object.
      */
-    sealed class Class<ID_TYPE : Comparable<ID_TYPE>, DATA : FeatureData<ID_TYPE>>(
+    open class Class<ID_TYPE : Comparable<ID_TYPE>, DATA : FeatureData<ID_TYPE>>(
         table: IdTable<ID_TYPE>,
     ) :
         EntityClass<ID_TYPE, DATA>(table) {
@@ -135,7 +132,7 @@ val defIdsRegistered = mutableSetOf<FeatureDefinition.Id>()
 /**
  * Registry for [FeatureDefinition]s.
  */
-sealed interface FeatureRegistry<DEF : FeatureDefinition<*, *>> {
+interface FeatureRegistry<DEF : FeatureDefinition<*, *>> {
     fun onRegister(definition: DEF)
 }
 
