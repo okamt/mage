@@ -1,8 +1,8 @@
 package helio.module.integration
 
 import helio.module.*
-import helio.util.addListener
 import helio.util.exposed.pos
+import helio.util.listen
 import net.bladehunt.kotstom.InstanceManager
 import net.minestom.server.event.player.AsyncPlayerConfigurationEvent
 import net.minestom.server.event.player.PlayerDisconnectEvent
@@ -22,10 +22,10 @@ object PlayerInstances : ServerModule("playerInstances") {
     override fun onRegisterModule() {
         check(::defaultInstance.isInitialized) { "defaultInstance must be set." }
 
-        eventNode.addListener(AsyncPlayerConfigurationEvent::class) {
+        eventNode.listen<AsyncPlayerConfigurationEvent> {
             val playerInstanceData = PlayerInstance.getData(player.uuid)
             if (playerInstanceData != null) {
-                val instance = InstanceManager.getInstance(playerInstanceData.instanceUUID) ?: return@addListener
+                val instance = InstanceManager.getInstance(playerInstanceData.instanceUUID) ?: return@listen
                 spawningInstance = instance
                 player.respawnPoint = playerInstanceData.pos.value
             } else {
@@ -34,7 +34,7 @@ object PlayerInstances : ServerModule("playerInstances") {
             }
         }
 
-        eventNode.addListener(PlayerDisconnectEvent::class) {
+        eventNode.listen<PlayerDisconnectEvent> {
             PlayerInstance.writeData(player.uuid) {
                 instanceUUID = player.instance.uniqueId
                 pos.value = player.position

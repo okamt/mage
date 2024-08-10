@@ -124,6 +124,8 @@ abstract class FeatureDefinition<ID_TYPE : Comparable<ID_TYPE>, DATA : FeatureDa
         transaction {
             data.findById(id)?.apply(block) ?: data.new(id, block)
         }
+
+    internal open fun onRegisterDefinition() {}
 }
 
 /**
@@ -156,6 +158,7 @@ interface FeatureRegistry<DEF : FeatureDefinition<*, *>> {
 fun <DEF : FeatureDefinition<*, *>> FeatureRegistry<DEF>.register(definition: DEF) {
     require(definition.id !in defIdsRegistered) { "Already registered a FeatureDefinition with id ${definition.id}." }
     defIdsRegistered.add(definition.id)
+    definition.onRegisterDefinition()
     onRegister(definition)
 }
 

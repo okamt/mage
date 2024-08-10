@@ -70,7 +70,7 @@ object Items : ServerModule("items"), FeatureRegistry<ItemDefinition<*>> {
         for (event in events) {
             eventNode.addListener(event.java) {
                 val itemStack = getItemStackFromEvent(it)
-                itemStack.itemDef.delegateEvent(it, itemStack)
+                itemStack.definition.delegateEvent(it, itemStack)
             }
         }
     }
@@ -130,18 +130,16 @@ abstract class ItemDefinition<DATA : ItemData>(
 
     fun getData(itemStack: ItemStack): DATA {
         val itemDataId = itemStack.getTag(ITEM_DATA_ID_TAG)
-        return transaction { data.findById(itemDataId) }
+        return getData(itemDataId)
             ?: error("ItemStack $itemStack has no associated ItemData for ItemDefinition $id.")
     }
 
     @Suppress("UnstableApiUsage")
-    fun createItemStack(withData: DATA? = null): ItemStack {
-        var itemStack = ItemStack.AIR
-
+    fun createItemStack(withData: DATA? = null): ItemStack =
         transaction {
             val itemData = withData ?: data.new {}
 
-            itemStack = ItemStack
+            val itemStack = ItemStack
                 .of(material, DataComponentMap.EMPTY)
                 .withCustomName(
                     Component.translatable(this@ItemDefinition.id.value).decoration(TextDecoration.ITALIC, false)
@@ -149,14 +147,11 @@ abstract class ItemDefinition<DATA : ItemData>(
                 .withTag(ITEM_DEF_ID_TAG, this@ItemDefinition.id.value)
                 .withTag(ITEM_DATA_ID_TAG, itemData.id.value)
 
-            itemStack = onCreateItemStack(itemStack, itemData)
+            onCreateItemStack(itemStack, itemData)
         }
-
-        return itemStack
-    }
 }
 
-val ItemStack.itemDef: ItemDefinition<*>
+val ItemStack.definition: ItemDefinition<*>
     get() = Items.getItemDefinition(this)
 
 /**
