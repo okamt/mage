@@ -81,13 +81,13 @@ abstract class ServerModule(val id: String) {
 }
 
 /**
- * Definition of a feature of a system.
+ * Definition of a feature of a system. Implements [DataStore], backed by [DATA]'s SQL table.
  *
  * @param data The companion object of the [FeatureData] (which should be a [FeatureData.Class]).
  */
 abstract class FeatureDefinition<ID_TYPE : Comparable<ID_TYPE>, DATA : FeatureData<ID_TYPE>>(
     val data: Class<ID_TYPE, DATA>
-) {
+) : DataStore<ID_TYPE, DATA> {
     @JvmInline
     value class Id(val value: String) {
         companion object {
@@ -107,29 +107,55 @@ abstract class FeatureDefinition<ID_TYPE : Comparable<ID_TYPE>, DATA : FeatureDa
      */
     abstract val id: Id
 
-    fun getDataOrNew(
-        id: ID_TYPE,
-        init: DATA.() -> Unit = {}
+    override fun getDataOrNew(
+        key: ID_TYPE,
+        block: DATA.() -> Unit
     ): DATA =
         transaction {
-            data.findById(id) ?: data.new(id, init)
+            data.findById(key) ?: data.new(key, block)
         }
 
-    fun getData(id: ID_TYPE): DATA? =
+    fun getDataOrNew(key: ID_TYPE): DATA = getDataOrNew(key) {}
+
+    override fun getData(key: ID_TYPE): DATA? =
         transaction {
-            data.findById(id)
+            data.findById(key)
         }
 
-    fun writeData(id: ID_TYPE, block: DATA.() -> Unit) =
+    override fun writeData(key: ID_TYPE, block: DATA.() -> Unit) =
         transaction {
-            data.findById(id)?.apply(block) ?: data.new(id, block)
+            data.findById(key)?.apply(block) ?: data.new(key, block)
         }
 
     internal open fun onRegisterDefinition() {}
 }
 
+sealed interface DataStore<KEY, DATA> {
+    fun getData(key: KEY): DATA?
+    fun writeData(key: KEY, block: DATA.() -> Unit): DATA
+
+    fun getDataOrNew(key: KEY, block: DATA.() -> Unit): DATA =
+        getData(key) ?: writeData(key, block)
+}
+
 /**
- * Data for a feature of a system. Each [FeatureData] has its own Exposed [Table]. All subclasses must have a companion object that extends [Class].
+ * A [DataStore] that keeps data in memory only (non-persistent). Generally should be extended from the companion object of [DATA].
+ */
+abstract class VolatileData<KEY, DATA>(private val dataConstructor: () -> DATA) : DataStore<KEY, DATA> {
+    private val volatileDataMap = mutableMapOf<KEY, DATA>()
+
+    override fun getData(key: KEY): DATA? = volatileDataMap[key]
+
+    override fun writeData(key: KEY, block: DATA.() -> Unit): DATA {
+        val result = dataConstructor().apply(block)
+        volatileDataMap[key] = result
+        return result
+    }
+}
+
+/**
+ * Data for a feature of a system. Each [FeatureData] has its own SQL [Table], so data can be persistent.
+ * All subclasses must have a companion object that extends [Class].
  */
 abstract class FeatureData<T : Comparable<T>>(id: EntityID<T>) : Entity<T>(id) {
     /**

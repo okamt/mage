@@ -2,32 +2,53 @@ package helio.jam
 
 import helio.module.*
 import helio.util.listen
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import net.bladehunt.kotstom.GlobalEventHandler
 import net.bladehunt.kotstom.SchedulerManager
+import net.bladehunt.kotstom.coroutines.MinestomDispatcher
+import net.bladehunt.kotstom.dsl.particle
 import net.bladehunt.kotstom.extension.adventure.asComponent
+import net.bladehunt.kotstom.extension.adventure.color
 import net.bladehunt.kotstom.extension.asVec
+import net.bladehunt.kotstom.extension.minus
 import net.bladehunt.kotstom.extension.times
+import net.kyori.adventure.bossbar.BossBar
+import net.kyori.adventure.sound.Sound
+import net.kyori.adventure.text.format.TextColor
 import net.kyori.adventure.title.Title
 import net.minestom.server.MinecraftServer
+import net.minestom.server.coordinate.Point
 import net.minestom.server.coordinate.Pos
-import net.minestom.server.entity.EntityCreature
-import net.minestom.server.entity.EntityType
-import net.minestom.server.entity.GameMode
+import net.minestom.server.coordinate.Vec
+import net.minestom.server.entity.*
 import net.minestom.server.entity.attribute.Attribute
+import net.minestom.server.entity.attribute.AttributeModifier
+import net.minestom.server.entity.attribute.AttributeOperation
+import net.minestom.server.entity.damage.DamageType
+import net.minestom.server.entity.metadata.other.EndCrystalMeta
+import net.minestom.server.entity.metadata.other.FallingBlockMeta
+import net.minestom.server.event.item.ItemDropEvent
 import net.minestom.server.event.player.AsyncPlayerConfigurationEvent
+import net.minestom.server.event.player.PlayerMoveEvent
 import net.minestom.server.event.player.PlayerSpawnEvent
 import net.minestom.server.instance.Instance
 import net.minestom.server.instance.InstanceContainer
 import net.minestom.server.instance.WorldBorder
 import net.minestom.server.instance.block.Block
+import net.minestom.server.particle.Particle
+import net.minestom.server.sound.SoundEvent
+import net.minestom.server.tag.Tag
 import net.minestom.server.world.DimensionType
 import org.jetbrains.exposed.dao.id.EntityID
 import org.jetbrains.exposed.dao.id.UUIDTable
 import org.jetbrains.exposed.sql.Database
 import java.util.*
-
+import kotlin.math.ceil
+import kotlin.math.floor
+import kotlin.random.Random
 
 @RegisterFeature(Instances::class)
 object JamGame : InstanceDefinition<JamGame.Data>(Data) {
@@ -40,11 +61,13 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
     const val DIMENSION_MIN_Y = -2032
     const val START_Y = DIMENSION_MAX_Y - 64
     const val END_Y = DIMENSION_MIN_Y + 64
+    const val START_BARRIER_Y_OFFSET = 32
+    const val TOTAL_SECTIONS = 4
 
     override val dimensionType =
         DimensionType.builder().ambientLight(1f).minY(DIMENSION_MIN_Y).height(DIMENSION_HEIGHT)
-            .logicalHeight(DIMENSION_HEIGHT).effects("minecraft:nether").build()
-    override val defaultSpawnPoint = Pos(0.0, (START_Y + 1).toDouble(), 0.0)
+            .logicalHeight(DIMENSION_HEIGHT).effects("nether").build()
+    override val defaultSpawnPoint = Pos(0.0, (START_Y + START_BARRIER_Y_OFFSET + 1).toDouble(), 0.0)
 
     enum class State {
         WAITING,
@@ -187,10 +210,18 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
                 )
 
                 fun checkChicken() {
-                    if (instance.players.find { it.position.y in (chicken.position.y - 100..chicken.position.y + 100) } != null) {
+                    if (instance.players.find {
+                            it.position.y in (chicken.position.y - 100..chicken.position.y + 100) &&
+                                    it.position.x in (chicken.position.x - RADIUS * 2..chicken.position.x + RADIUS * 2) &&
+                                    it.position.z in (chicken.position.z - RADIUS * 2..chicken.position.z + RADIUS * 2)
+                        } != null) {
                         chicken.velocity = chicken.position.direction().times(5.0).asVec()
                     }
-                    SchedulerManager.scheduleNextTick(::checkChicken)
+                    if (chicken.aliveTicks > 20 * 60 * 5) {
+                        chicken.remove()
+                    } else {
+                        SchedulerManager.scheduleNextTick(::checkChicken)
+                    }
                 }
                 SchedulerManager.scheduleNextTick(::checkChicken)
             }
@@ -212,18 +243,101 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
         return instanceContainer
     }
 
+    override suspend fun PlayerMoveEvent.handle(data: Data) {
+        when (state) {
+            State.ONGOING -> {
+                if (isOnGround) {
+                    player.teleport(player.position.sub(0.0, 0.25, 0.0))
+                    player.playSound(
+                        Sound.sound(
+                            SoundEvent.ENTITY_ZOMBIE_BREAK_WOODEN_DOOR,
+                            Sound.Source.AMBIENT,
+                            1f,
+                            1f
+                        )
+                    )
+                    player.damage(DamageType.FALL, 0f)
+
+                    breakBlocksAroundPoint(newPosition) {
+                        val block = instance.getBlock(x, y, z)
+                        player.sendPacket(particle {
+                            particle = Particle.BLOCK.withBlock(block)
+                            position = Vec(x.toDouble(), y.toDouble(), z.toDouble())
+                            count = 5
+                        })
+                    }
+                }
+            }
+
+            State.WAITING -> {}
+        }
+    }
+
+    val bossbars = mutableMapOf<UUID, BossBar>()
+    var tick = 0
+    val flySound = Sound.sound(SoundEvent.ITEM_ELYTRA_FLYING, Sound.Source.AMBIENT, 1f, 0.8f)
+    const val FLY_SOUND_AIRBORNE_TICKS_THRESHOLD = 20 * 2
+    const val FLY_SOUND_DURATION_TICKS = 20 * 10
+
+    override suspend fun onTick() {
+        fun getBossbarProgress(player: Player): Float = when (player.data.state) {
+            JamPlayerData.State.PLAYING -> {
+                val oneSection = (START_Y - END_Y).toFloat()
+                val total = TOTAL_SECTIONS.toFloat() * oneSection
+                val playerDepthInCurrentSection = oneSection - (player.position.y.toFloat() - END_Y)
+                1f - ((oneSection * player.data.section + playerDepthInCurrentSection) / total)
+                    .coerceIn(0f..1f)
+            }
+
+            JamPlayerData.State.SPECTATING -> {
+                1f
+            }
+        }
+
+        for (player in instance.players) {
+            val bar = bossbars.getOrPut(player.uuid) {
+                BossBar.bossBar(
+                    "Height".color(TextColor.color(0x1fbdd2)),
+                    getBossbarProgress(player),
+                    BossBar.Color.BLUE,
+                    BossBar.Overlay.PROGRESS
+                ).addViewer(player)
+            }
+            bar.progress(getBossbarProgress(player))
+
+            if (player.data.state == JamPlayerData.State.PLAYING && state == State.ONGOING) {
+                if ((tick - player.data.lastPlayedFlySoundTick) >= FLY_SOUND_DURATION_TICKS && player.data.ticksAirborne >= FLY_SOUND_AIRBORNE_TICKS_THRESHOLD) {
+                    player.data.lastPlayedFlySoundTick = tick
+                    player.stopSound(flySound)
+                    player.playSound(flySound)
+                }
+            }
+
+            if (player.isOnGround) {
+                player.data.ticksAirborne = 0
+                player.data.lastPlayedFlySoundTick = -999
+                player.stopSound(flySound)
+            } else {
+                player.data.ticksAirborne += 1
+            }
+        }
+
+        tick += 1
+    }
+
     override suspend fun PlayerSpawnEvent.handle(data: Data) = coroutineScope {
         if (isFirstSpawn) {
-            player.getAttribute(Attribute.GENERIC_GRAVITY).baseValue = 0.08 / 2
             when (state) {
                 State.WAITING -> {
                     player.gameMode = GameMode.ADVENTURE
+                    player.data.state = JamPlayerData.State.PLAYING
                     // TODO: Add logic to check if enough players
                     start()
                 }
 
                 State.ONGOING -> {
                     player.gameMode = GameMode.SPECTATOR
+                    player.data.state = JamPlayerData.State.SPECTATING
                 }
             }
         }
@@ -232,7 +346,7 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
     fun setStartBarrier(instance: Instance = this.instance, block: Block = Block.BARRIER) {
         for (x in -RADIUS..RADIUS) {
             for (z in -RADIUS..RADIUS) {
-                instance.setBlock(x, START_Y, z, block)
+                instance.setBlock(x, START_Y + START_BARRIER_Y_OFFSET, z, block)
             }
         }
     }
@@ -248,6 +362,95 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
         }
     }
 
+    fun generateBonus() {
+        val margin = 10
+        val gap = 10.0
+
+        suspend fun giveItem(player: Player) {
+            if (player.data.rollingItem) {
+                return
+            }
+            player.data.rollingItem = true
+
+            for (i in 0..20) {
+                player.playSound(Sound.sound(SoundEvent.BLOCK_LEVER_CLICK, Sound.Source.NEUTRAL, 1f, 1f))
+                delay(50)
+            }
+            player.playSound(
+                Sound.sound(
+                    SoundEvent.ENTITY_EXPERIENCE_ORB_PICKUP,
+                    Sound.Source.AMBIENT,
+                    1f,
+                    1f
+                )
+            )
+            player.inventory.clear()
+            for (i in 0..8) {
+                player.inventory.addItemStack(getRandomItem().withTag(Tag.UUID("distinct"), UUID.randomUUID()))
+            }
+
+            player.data.rollingItem = false
+        }
+
+        fun spawnCrystal(pos: Pos) {
+            val crystal = Entity(EntityType.END_CRYSTAL)
+            val meta = (crystal.entityMeta as EndCrystalMeta)
+            meta.isShowingBottom = false
+            crystal.setNoGravity(true)
+            crystal.isGlowing = true
+            crystal.setInstance(instance, pos)
+
+            fun checkCrystal() {
+                for (player in instance.players) {
+                    if (crystal.boundingBox.intersectEntity(crystal.position, player)) {
+                        if (player.data.rollingItem) {
+                            continue
+                        }
+
+                        crystal.remove()
+                        player.sendMessage("Wowzers!")
+                        player.playSound(
+                            Sound.sound(
+                                SoundEvent.ENTITY_EXPERIENCE_ORB_PICKUP,
+                                Sound.Source.AMBIENT,
+                                1f,
+                                1f
+                            )
+                        )
+                        CoroutineScope(MinestomDispatcher).launch { giveItem(player) }
+                        break
+                    }
+                }
+
+                if (!crystal.isRemoved) {
+                    SchedulerManager.scheduleNextTick(::checkCrystal)
+                }
+            }
+            SchedulerManager.scheduleNextTick(::checkCrystal)
+        }
+
+        for (y in START_Y - 200 downTo END_Y step 200) {
+            var x = 0
+            var z = 0
+            do {
+                x = (-RADIUS + margin..RADIUS - margin).random()
+                z = (-RADIUS + margin..RADIUS - margin).random()
+            } while (!instance.getBlock(x, y, z).isAir)
+
+            val direction = Pos(0.0, 0.0, 0.0, (-180..180).random().toFloat(), 0f)
+            val rowDirection = direction.withYaw(direction.yaw + 90)
+            var rowPos = Pos(x.toDouble(), y.toDouble(), z.toDouble())
+            for (rowI in 0..2) {
+                var colPos = rowPos
+                for (colI in 0..2) {
+                    spawnCrystal(colPos)
+                    colPos = colPos.add(rowDirection.direction().times(gap))
+                }
+                rowPos = rowPos.add(direction.direction().times(gap))
+            }
+        }
+    }
+
     suspend fun countdown() {
         instance.showTitle(Title.title("3".asComponent(), "".asComponent()))
         delay(1000)
@@ -260,26 +463,97 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
     }
 
     fun start() {
-        state = State.ONGOING
-        setStartBarrier(block = Block.AIR)
-    }
-}
-
-@RegisterFeature(Players::class)
-object JamPlayerData : PlayerDataDefinition<JamPlayerData.Data>(Data) {
-    const val ID = "playerData"
-    override val id = Id(ID)
-
-    class Data(id: EntityID<UUID>) : PlayerData(id) {
-        companion object : Class<Data>(Table)
-
-        object Table : UUIDTable(ID) {
-            val spectating = bool("spectating")
+        for (player in instance.players) {
+            player.noJump = true
+            player.gravity = 0.08 / 2.0
         }
+        setStartBarrier(block = Block.AIR)
+        state = State.ONGOING
+    }
 
-        var spectating by Table.spectating
+    fun reset() {
+        for (player in instance.players) {
+            player.noJump = false
+            player.gravity = 0.08
+        }
+        setStartBarrier()
+        state = State.WAITING
+    }
+
+    fun breakBlocksAroundPoint(point: Point, range: Double = 0.5, callback: XYZ.() -> Unit = {}) {
+        point.forEachBlockAround(range) {
+            val block = instance.getBlock(x, y, z)
+            if (block == Block.BARRIER) {
+                return@forEachBlockAround
+            }
+            val fallingBlock = Entity(EntityType.FALLING_BLOCK)
+            val meta = fallingBlock.entityMeta as FallingBlockMeta
+            meta.block = block
+            val spawnPos = Pos(x.toDouble() + 0.5, y.toDouble() + 0.5 + 0.5, z.toDouble() + 0.5)
+            instance.setBlock(x, y, z, Block.AIR)
+            fallingBlock.setInstance(instance, spawnPos)
+            fallingBlock.velocity = Vec(0.0, 10.0, 0.0).add(
+                spawnPos.minus(point).withY(0.0).mul(5.0)
+                    .add(Random.nextDouble(), 0.0, Random.nextDouble())
+            )
+
+            this.apply(callback)
+        }
     }
 }
+
+var Player.noJump
+    get() = getAttribute(Attribute.GENERIC_JUMP_STRENGTH).modifiers().isNotEmpty()
+    set(value) {
+        val mod = AttributeModifier(
+            "no_jump",
+            -100.0,
+            AttributeOperation.ADD_VALUE
+        )
+        val attribute = getAttribute(Attribute.GENERIC_JUMP_STRENGTH)
+        if (value) attribute.addModifier(mod) else attribute.removeModifier(mod.id)
+    }
+
+var Player.gravity
+    get() = getAttribute(Attribute.GENERIC_GRAVITY).baseValue
+    set(value) {
+        getAttribute(Attribute.GENERIC_GRAVITY).baseValue = value
+    }
+
+data class XYZ(
+    val x: Int,
+    val y: Int,
+    val z: Int,
+)
+
+fun Point.forEachBlockAround(range: Double = 0.5, block: XYZ.() -> Unit) {
+    for (x in floor(x() - range).toInt()..ceil(x() + range).toInt()) {
+        for (z in floor(z() - range).toInt()..ceil(z() + range).toInt()) {
+            for (y in floor(y() - range).toInt()..ceil(y() + range).toInt()) {
+                XYZ(x, y, z).apply(block)
+            }
+        }
+    }
+}
+
+class JamPlayerData {
+    companion object : VolatileData<UUID, JamPlayerData>(::JamPlayerData)
+
+    var state = State.PLAYING
+    var section = 0
+    var lastPlayedFlySoundTick = -999
+    var ticksAirborne = 0
+    var rollingItem = false
+    var isUsingItem = false
+
+    enum class State {
+        PLAYING,
+        SPECTATING,
+    }
+}
+
+val Player.data
+    get() = JamPlayerData.getDataOrNew(uuid) {}
 
 data object Config {
     val address: String = "0.0.0.0"
@@ -303,8 +577,12 @@ fun start() {
         player.respawnPoint = JamGame.defaultSpawnPoint
     }
 
+    GlobalEventHandler.listen<ItemDropEvent> { isCancelled = true }
+
     JamGame.instance = JamGame.getFirstInstanceOrNew()
     JamGame.generateObstacles()
+    JamGame.generateBonus()
+    JamGame.setStartBarrier()
 
     minecraftServer.start(Config.address, Config.port)
 }

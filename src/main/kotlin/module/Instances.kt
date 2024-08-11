@@ -4,9 +4,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import net.bladehunt.kotstom.DimensionTypeRegistry
 import net.bladehunt.kotstom.InstanceManager
+import net.bladehunt.kotstom.SchedulerManager
 import net.bladehunt.kotstom.coroutines.MinestomDispatcher
 import net.minestom.server.coordinate.Pos
 import net.minestom.server.event.Event
+import net.minestom.server.event.player.PlayerMoveEvent
 import net.minestom.server.event.player.PlayerSpawnEvent
 import net.minestom.server.event.player.PlayerStartSneakingEvent
 import net.minestom.server.event.player.PlayerStopSneakingEvent
@@ -35,6 +37,9 @@ object Instances : ServerModule("instances"), FeatureRegistry<InstanceDefinition
 
     private val events = listOf(
         PlayerSpawnEvent::class,
+        PlayerStartSneakingEvent::class,
+        PlayerStopSneakingEvent::class,
+        PlayerMoveEvent::class,
     )
 
     private fun getInstanceFromEvent(event: Event): Instance = when (event) {
@@ -98,6 +103,7 @@ abstract class InstanceDefinition<DATA : InstanceData>(
                 is PlayerSpawnEvent -> event.handle(getData(instance))
                 is PlayerStartSneakingEvent -> event.handle(getData(instance))
                 is PlayerStopSneakingEvent -> event.handle(getData(instance))
+                is PlayerMoveEvent -> event.handle(getData(instance))
 
                 else -> error("No event handler for event ${event::class}.")
             }
@@ -106,7 +112,9 @@ abstract class InstanceDefinition<DATA : InstanceData>(
     open suspend fun PlayerSpawnEvent.handle(data: DATA) {}
     open suspend fun PlayerStartSneakingEvent.handle(data: DATA) {}
     open suspend fun PlayerStopSneakingEvent.handle(data: DATA) {}
+    open suspend fun PlayerMoveEvent.handle(data: DATA) {}
 
+    open suspend fun onTick() {}
     open fun onCreateInstanceContainer(instanceContainer: InstanceContainer): InstanceContainer = instanceContainer
 
     internal fun registerDimension() {
@@ -128,6 +136,14 @@ abstract class InstanceDefinition<DATA : InstanceData>(
 
             instanceContainer = onCreateInstanceContainer(instanceContainer)
             instanceContainers.add(instanceContainer)
+
+            fun runEveryTick() {
+                CoroutineScope(MinestomDispatcher).launch {
+                    onTick()
+                }
+                SchedulerManager.scheduleNextTick(::runEveryTick)
+            }
+            SchedulerManager.scheduleNextTick(::runEveryTick)
 
             instanceContainer
         }

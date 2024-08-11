@@ -51,4 +51,7 @@ abstract class PlayerData(id: EntityID<UUID>) : FeatureData<UUID>(id) {
 
 abstract class PlayerDataDefinition<DATA : PlayerData>(
     dataClass: PlayerData.Class<DATA>,
-) : FeatureDefinition<UUID, DATA>(dataClass)
+) : FeatureDefinition<UUID, DATA>(dataClass) {
+    fun getDataOrNew(player: Player, init: DATA.() -> Unit): DATA =
+        getDataOrNew(player.uuid, init)
+}
