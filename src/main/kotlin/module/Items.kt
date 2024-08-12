@@ -70,6 +70,9 @@ object Items : ServerModule("items"), FeatureRegistry<ItemDefinition<*>> {
         for (event in events) {
             eventNode.addListener(event.java) {
                 val itemStack = getItemStackFromEvent(it)
+                if (itemStack.isAir) {
+                    return@addListener
+                }
                 itemStack.definition.delegateEvent(it, itemStack)
             }
         }

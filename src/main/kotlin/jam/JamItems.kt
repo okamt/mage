@@ -26,7 +26,7 @@ fun getRandomItem(): ItemStack =
 
 @RegisterFeature(Items::class)
 object AnvilItem : ItemDefinition<ItemData.Empty>(ItemData.Empty) {
-    const val ID = "anvil"
+    const val ID = "Anvil"
     override val id = Id(ID)
     override val material: Material = Material.ANVIL
 
@@ -45,14 +45,20 @@ object AnvilItem : ItemDefinition<ItemData.Empty>(ItemData.Empty) {
         anchor.setInstance(player.instance, player.position)
         anvil.setInstance(player.instance)
         anchor.addPassenger(anvil)
-        anchor.addPassenger(player)
+
+        var fodder = Entity(EntityType.ZOMBIE)
+        fodder.isInvisible = true
+        fodder.setNoGravity(true)
+        fodder.setInstance(instance)
+
+        anvil.addPassenger(player)
 
         var timer = 20 * 5
 
         fun use() {
             if (anchor.isOnGround) {
                 breakBlocksAroundPoint(anchor.position) {
-                    player.sendPacket(particle {
+                    instance.sendGroupedPacket(particle {
                         particle = Particle.EXPLOSION
                         position = Vec(x.toDouble(), y.toDouble(), z.toDouble())
                         count = 1
@@ -71,9 +77,13 @@ object AnvilItem : ItemDefinition<ItemData.Empty>(ItemData.Empty) {
             timer -= 1
             if (timer < 0) {
                 anchor.remove()
-                anvil.remove()
-                player.velocity = player.velocity.withY(-10.0)
-                player.data.isUsingItem = false
+                fodder.remove()
+                if (!anvil.isRemoved) {
+                    anvil.removePassenger(player)
+                    anvil.remove()
+                    player.velocity = player.velocity.withY(-10.0)
+                    player.data.isUsingItem = false
+                }
             } else {
                 SchedulerManager.scheduleNextTick(::use)
             }
