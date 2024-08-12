@@ -2,10 +2,8 @@ package helio.jam
 
 import helio.module.*
 import helio.util.listen
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
+import net.bladehunt.kotstom.BiomeRegistry
 import net.bladehunt.kotstom.GlobalEventHandler
 import net.bladehunt.kotstom.SchedulerManager
 import net.bladehunt.kotstom.coroutines.MinestomDispatcher
@@ -14,10 +12,12 @@ import net.bladehunt.kotstom.extension.adventure.asComponent
 import net.bladehunt.kotstom.extension.adventure.color
 import net.bladehunt.kotstom.extension.asVec
 import net.bladehunt.kotstom.extension.minus
+import net.bladehunt.kotstom.extension.plus
 import net.bladehunt.kotstom.extension.times
 import net.kyori.adventure.bossbar.BossBar
 import net.kyori.adventure.sound.Sound
 import net.kyori.adventure.text.format.TextColor
+import net.kyori.adventure.text.format.TextDecoration
 import net.kyori.adventure.title.Title
 import net.minestom.server.MinecraftServer
 import net.minestom.server.coordinate.Point
@@ -30,6 +30,7 @@ import net.minestom.server.entity.attribute.AttributeOperation
 import net.minestom.server.entity.damage.DamageType
 import net.minestom.server.entity.metadata.other.EndCrystalMeta
 import net.minestom.server.entity.metadata.other.FallingBlockMeta
+import net.minestom.server.event.inventory.InventoryPreClickEvent
 import net.minestom.server.event.item.ItemDropEvent
 import net.minestom.server.event.player.AsyncPlayerConfigurationEvent
 import net.minestom.server.event.player.PlayerMoveEvent
@@ -38,13 +39,22 @@ import net.minestom.server.instance.Instance
 import net.minestom.server.instance.InstanceContainer
 import net.minestom.server.instance.WorldBorder
 import net.minestom.server.instance.block.Block
+import net.minestom.server.network.packet.server.play.WorldBorderCenterPacket
+import net.minestom.server.network.packet.server.play.WorldBorderLerpSizePacket
 import net.minestom.server.particle.Particle
+import net.minestom.server.potion.Potion
+import net.minestom.server.potion.PotionEffect
+import net.minestom.server.registry.DynamicRegistry
 import net.minestom.server.sound.SoundEvent
 import net.minestom.server.tag.Tag
+import net.minestom.server.timer.TaskSchedule
 import net.minestom.server.world.DimensionType
+import net.minestom.server.world.biome.Biome
+import net.minestom.server.world.biome.BiomeEffects
 import org.jetbrains.exposed.dao.id.EntityID
 import org.jetbrains.exposed.dao.id.UUIDTable
 import org.jetbrains.exposed.sql.Database
+import org.tinylog.kotlin.Logger
 import java.util.*
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -56,18 +66,23 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
     override val id = Id(ID)
 
     const val RADIUS = 32
-    const val DIMENSION_HEIGHT = 4064
-    const val DIMENSION_MAX_Y = 2031
-    const val DIMENSION_MIN_Y = -2032
+    const val DIMENSION_MAX_Y = 1007
+    const val DIMENSION_MIN_Y = 0
+
+    //const val DIMENSION_MIN_Y = -2032
+    const val DIMENSION_HEIGHT = 1008
     const val START_Y = DIMENSION_MAX_Y - 64
     const val END_Y = DIMENSION_MIN_Y + 64
     const val START_BARRIER_Y_OFFSET = 32
     const val TOTAL_SECTIONS = 4
+    val sectionOffset = Vec(1000.0, 0.0, 0.0)
 
     override val dimensionType =
-        DimensionType.builder().ambientLight(1f).minY(DIMENSION_MIN_Y).height(DIMENSION_HEIGHT)
-            .logicalHeight(DIMENSION_HEIGHT).effects("nether").build()
+        DimensionType.builder().ambientLight(1f).minY(DIMENSION_MIN_Y).height(DIMENSION_HEIGHT).fixedTime(6000)
+            .logicalHeight(DIMENSION_HEIGHT).build()
+
     override val defaultSpawnPoint = Pos(0.0, (START_Y + START_BARRIER_Y_OFFSET + 1).toDouble(), 0.0)
+    //override val defaultSpawnPoint = Pos(0.0, 50.0, 0.0)
 
     enum class State {
         WAITING,
@@ -77,25 +92,227 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
     var state = State.WAITING
     lateinit var instance: Instance
 
+    private fun makeZoneBiome(color: Int): DynamicRegistry.Key<Biome> =
+        BiomeRegistry.register(
+            color.toString(),
+            Biome.builder().effects(BiomeEffects.builder().skyColor(color).build()).build()
+        )
+
+    enum class Zone(
+        val colorName: String,
+        val description: String,
+        val concreteBlock: Block,
+        val color: Int,
+        val bossbarColor: BossBar.Color,
+        val biome: DynamicRegistry.Key<Biome> = makeZoneBiome(color),
+    ) {
+        PINK(
+            "Pink",
+            "All items have stronger effect.",
+            Block.PINK_CONCRETE,
+            0xd946ef,
+            BossBar.Color.PINK,
+        ),
+
+        BLUE(
+            "Blue",
+            "Players are bigger.",
+            Block.BLUE_CONCRETE,
+            0x3b82f6,
+            BossBar.Color.BLUE,
+        ),
+
+        RED(
+            "Red",
+            "Faster gravity.",
+            Block.RED_CONCRETE,
+            0xef4444,
+            BossBar.Color.RED,
+        ),
+
+        GREEN(
+            "Green",
+            "Smaller border.",
+            Block.GREEN_CONCRETE,
+            0x22c55e,
+            BossBar.Color.GREEN,
+        ),
+
+        YELLOW(
+            "Yellow",
+            "Hitting obstacles gives boost.",
+            Block.YELLOW_CONCRETE,
+            0xfde047,
+            BossBar.Color.YELLOW,
+        ),
+
+        PURPLE(
+            "Purple",
+            "More obstacles.",
+            Block.PURPLE_CONCRETE,
+            0xa855f7,
+            BossBar.Color.PURPLE,
+        ),
+
+        WHITE(
+            "White",
+            "No effect.",
+            Block.WHITE_CONCRETE,
+            0xfafafa,
+            BossBar.Color.WHITE,
+        );
+
+        fun applyEffect(player: Player) {
+            when (this) {
+                PINK -> {
+                    player.data.pink = true
+                }
+
+                BLUE -> {
+                    player.getAttribute(Attribute.GENERIC_SCALE).baseValue = 3.0
+                }
+
+                RED -> {
+                    player.gravity = 0.08 * 2.0
+                }
+
+                GREEN -> {
+                    player.sendPacket(WorldBorderLerpSizePacket(RADIUS * 2.0, RADIUS.toDouble() / 2.0, 1000))
+                }
+
+                YELLOW -> {
+                    player.data.yellow = true
+                }
+
+                PURPLE -> {}
+
+                WHITE -> {}
+            }
+        }
+
+        fun unapplyEffect(player: Player) {
+            when (this) {
+                PINK -> {
+                    player.data.pink = false
+                }
+
+                BLUE -> {
+                    player.getAttribute(Attribute.GENERIC_SCALE).baseValue = 1.0
+                }
+
+                RED -> {
+                    player.gravity = 0.08 / 2.0
+                }
+
+                GREEN -> {
+                    player.sendPacket(WorldBorderLerpSizePacket(RADIUS.toDouble() / 2.0, RADIUS * 2.0, 1000))
+                }
+
+                YELLOW -> {
+                    player.data.yellow = false
+                }
+
+                PURPLE -> {}
+
+                WHITE -> {}
+            }
+        }
+    }
+
+    private fun setSectionZone(section: Int, zone: Zone) {
+        val startPos = sectionOffset * section.toDouble()
+        for (xOffset in -2..2) {
+            for (zOffset in -2..2) {
+                val pos = startPos + Vec(xOffset * 16.0, 0.0, zOffset * 16.0)
+                instance.loadChunk(pos).thenRun {
+                    val chunk = instance.getChunkAt(pos)!!
+                    Logger.info("${chunk.chunkX} ${chunk.chunkZ}")
+                    for (blockX in 0..15)
+                        for (blockZ in 0..15)
+                            for (blockY in DIMENSION_MIN_Y..DIMENSION_MAX_Y)
+                                chunk.setBiome(blockX, blockY, blockZ, zone.biome)
+                }
+            }
+        }
+    }
+
+    var sections = mutableListOf<Zone>()
+
+    fun generateSections() {
+        sections.clear()
+        for (i in 0..<TOTAL_SECTIONS) {
+            var zone: Zone
+            do {
+                zone = Zone.entries.random()
+            } while (zone in sections)
+            sections.add(zone)
+        }
+        //sections.forEachIndexed { i, zone -> setSectionZone(i, zone) }
+    }
+
+    private suspend fun moveToNextSection(player: Player) {
+        player.data.section += 1
+        if (player.data.section >= TOTAL_SECTIONS) {
+            TODO("You Win")
+            return
+        }
+
+        sections[player.data.section - 1].unapplyEffect(player)
+        val zone = sections[player.data.section]
+        zone.applyEffect(player)
+
+        val pos = sectionOffset * player.data.section.toDouble()
+        player.addEffect(Potion(PotionEffect.BLINDNESS, 3, 20 * 3))
+        delay(1500)
+        for (entity in instance.entities) {
+            if (player in entity.passengers) {
+                entity.removePassenger(player)
+                entity.remove()
+            }
+        }
+        player.passengers.forEach { player.removePassenger(it) }
+        player.data.isUsingItem = false
+        player.teleport(
+            (player.position.sub(sectionOffset * player.data.section.dec().toDouble())).add(pos)
+                .withY((START_Y + START_BARRIER_Y_OFFSET + 100 + 1).toDouble())
+        )
+        SchedulerManager.scheduleTask({
+            player.sendPacket(WorldBorderCenterPacket(pos.x(), pos.z()))
+            TaskSchedule.stop()
+        }, TaskSchedule.seconds(1))
+        player.showTitle(
+            Title.title(
+                "${zone.name} Zone".color(TextColor.color(zone.color)).decorate(TextDecoration.BOLD),
+                zone.description.color(TextColor.color(0x71717a))
+            )
+        )
+        delay(1500)
+        player.data.moving = false
+    }
+
     sealed interface Obstacle {
         companion object {
             fun random(): Obstacle = Obstacle::class.sealedSubclasses.map { it.objectInstance }.random() as Obstacle
 
             fun randomBlock() =
                 listOf(
+                    Block.PINK_CONCRETE,
                     Block.LIGHT_BLUE_CONCRETE,
-                    Block.MAGENTA_CONCRETE,
+                    Block.RED_CONCRETE,
+                    Block.LIME_CONCRETE,
                     Block.YELLOW_CONCRETE,
+                    Block.PINK_CONCRETE,
+                    Block.WHITE_CONCRETE,
                 ).random()
         }
 
-        fun generate(instance: Instance, y: Int)
+        fun generate(instance: Instance, pos: XYZ)
 
         data object Rectangle : Obstacle {
             const val MAX_SIZE = 40
             const val OUT = 10
 
-            override fun generate(instance: Instance, y: Int) {
+            override fun generate(instance: Instance, pos: XYZ) {
                 val block = randomBlock()
                 val xSize = (1..MAX_SIZE).random()
                 val zSize = MAX_SIZE + 1 - xSize
@@ -107,7 +324,7 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
                 //val z2 = (z1 + PADDING..RADIUS).random()
                 for (x in (xStart..xStart + xSize))
                     for (z in (zStart..zStart + zSize))
-                        instance.setBlock(x, y, z, block)
+                        instance.setBlock(pos.x + x, pos.y, pos.z + z, block)
             }
         }
 
@@ -153,16 +370,27 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
                 }
             }
 
-            override fun generate(instance: Instance, y: Int) {
-                val block = randomBlock()
-                val shape = shapes.random()
-                val radius = (shape.size / 2.0).toInt()
-                val centerX = (-RADIUS..RADIUS).random()
-                val centerZ = (-RADIUS..RADIUS).random()
-                for ((shapeX, x) in shape.indices.zip(centerX - radius..centerX + radius)) {
-                    for ((shapeZ, z) in shape.indices.zip(centerZ - radius..centerZ + radius)) {
-                        if (shape[shapeZ][shapeX] == '#') {
-                            instance.setBlock(x, y, z, block)
+            override fun generate(instance: Instance, pos: XYZ) {
+                val quadrants = mutableListOf(
+                    Vec(1.0, 1.0, 1.0),
+                    Vec(-1.0, 1.0, 1.0),
+                    Vec(-1.0, 1.0, -1.0),
+                    Vec(1.0, 1.0, -1.0),
+                )
+                for (yOffset in -1..(-1..1).random()) {
+                    val quadrant = quadrants.random()
+                    quadrants.remove(quadrant)
+
+                    val block = randomBlock()
+                    val shape = shapes.random()
+                    val radius = (shape.size / 2.0).toInt()
+                    val centerX = (1..RADIUS).random().times(quadrant.x.toInt())
+                    val centerZ = (1..RADIUS).random().times(quadrant.z.toInt())
+                    for ((shapeX, x) in shape.indices.zip(centerX - radius..centerX + radius)) {
+                        for ((shapeZ, z) in shape.indices.zip(centerZ - radius..centerZ + radius)) {
+                            if (shape[shapeZ][shapeX] == '#') {
+                                instance.setBlock(pos.x + x, pos.y + yOffset, pos.z + z, block)
+                            }
                         }
                     }
                 }
@@ -173,24 +401,24 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
             const val MIN_GRID_GAP = 3
             const val MAX_GRID_GAP = 10
 
-            override fun generate(instance: Instance, y: Int) {
+            override fun generate(instance: Instance, pos: XYZ) {
                 val block = randomBlock()
                 val gap = (MIN_GRID_GAP..MAX_GRID_GAP).random()
                 for (x in -RADIUS..RADIUS step gap) {
                     for (z in -RADIUS..RADIUS) {
-                        instance.setBlock(x, y, z, block)
+                        instance.setBlock(pos.x + x, pos.y, pos.z + z, block)
                     }
                 }
                 for (z in -RADIUS..RADIUS step gap) {
                     for (x in -RADIUS..RADIUS) {
-                        instance.setBlock(x, y, z, block)
+                        instance.setBlock(pos.x + x, pos.y, pos.z + z, block)
                     }
                 }
             }
         }
 
         data object Chicken : Obstacle {
-            override fun generate(instance: Instance, y: Int) {
+            override fun generate(instance: Instance, pos: XYZ) {
                 val x = (-RADIUS..RADIUS).random()
                 val z = (-RADIUS..RADIUS).random()
                 val chicken = EntityCreature(EntityType.CHICKEN)
@@ -200,10 +428,10 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
                 val centerishZ = (-RADIUS / 4..RADIUS / 4).random()
                 chicken.setInstance(
                     instance,
-                    Pos(x.toDouble(), y.toDouble(), z.toDouble()).withLookAt(
+                    Pos((pos.x + x).toDouble(), pos.y.toDouble(), (pos.z + z).toDouble()).withLookAt(
                         Pos(
                             centerishX.toDouble(),
-                            y.toDouble(),
+                            pos.y.toDouble(),
                             centerishZ.toDouble()
                         )
                     )
@@ -238,6 +466,21 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
         instanceContainer.worldBorder = WorldBorder((RADIUS * 2).toDouble(), 0.0, 0.0, 0, 0)
         instanceContainer.timeRate = 0
 
+        generateSections()
+
+        val sectionPoints = (0..<TOTAL_SECTIONS).map { sectionOffset * it.toDouble() }
+        instanceContainer.setGenerator { unit ->
+            val units = unit.subdivide()
+            assert(units.all { it.size().x() == 16.0 && it.size().z() == 16.0 })
+            units.forEach { subunit ->
+                var sectionIndex =
+                    sectionPoints.indexOfFirst { it.withY(0.0).distance(subunit.absoluteStart().withY(0.0)) < 100.0 }
+                if (sectionIndex == -1) return@forEach
+                val zone = sections[sectionIndex]
+                subunit.modifier().fillBiome(zone.biome)
+            }
+        }
+
         setStartBarrier(instanceContainer)
 
         return instanceContainer
@@ -256,15 +499,14 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
                             1f
                         )
                     )
-                    player.damage(DamageType.FALL, 0f)
+                    if (!player.data.yellow) {
+                        player.damage(DamageType.FALL, 0f)
+                    }
 
-                    breakBlocksAroundPoint(newPosition) {
-                        val block = instance.getBlock(x, y, z)
-                        player.sendPacket(particle {
-                            particle = Particle.BLOCK.withBlock(block)
-                            position = Vec(x.toDouble(), y.toDouble(), z.toDouble())
-                            count = 5
-                        })
+                    breakBlocksAroundPoint(newPosition)
+
+                    if (player.data.yellow) {
+                        player.velocity = player.velocity.withY(-50.0)
                     }
                 }
             }
@@ -282,11 +524,16 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
     override suspend fun onTick() {
         fun getBossbarProgress(player: Player): Float = when (player.data.state) {
             JamPlayerData.State.PLAYING -> {
-                val oneSection = (START_Y - END_Y).toFloat()
-                val total = TOTAL_SECTIONS.toFloat() * oneSection
-                val playerDepthInCurrentSection = oneSection - (player.position.y.toFloat() - END_Y)
-                1f - ((oneSection * player.data.section + playerDepthInCurrentSection) / total)
-                    .coerceIn(0f..1f)
+                val oneSection = 1f / TOTAL_SECTIONS
+                val playerDepthInCurrentSection =
+                    ((1f - ((player.position.y.toFloat().coerceIn(
+                        END_Y.toFloat(),
+                        START_Y.toFloat()
+                    ) - END_Y) / (START_Y - END_Y))) / TOTAL_SECTIONS).coerceIn(0f..oneSection)
+                // 2000 -2000  2000 = 0
+                // 2000 -2000  1000 = 0.25
+                // 2000 -2000  0 = 0.5
+                1f - (oneSection * player.data.section.toFloat() + playerDepthInCurrentSection).coerceIn(0f..1f)
             }
 
             JamPlayerData.State.SPECTATING -> {
@@ -296,20 +543,35 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
 
         for (player in instance.players) {
             val bar = bossbars.getOrPut(player.uuid) {
+                val zone = sections[player.data.section]
                 BossBar.bossBar(
-                    "Height".color(TextColor.color(0x1fbdd2)),
+                    "Height".color(TextColor.color(zone.color)),
                     getBossbarProgress(player),
-                    BossBar.Color.BLUE,
+                    zone.bossbarColor,
                     BossBar.Overlay.PROGRESS
                 ).addViewer(player)
             }
             bar.progress(getBossbarProgress(player))
+            val zone = sections[player.data.section]
+            bar.color(zone.bossbarColor)
+            bar.name("Height".color(TextColor.color(zone.color)))
 
             if (player.data.state == JamPlayerData.State.PLAYING && state == State.ONGOING) {
                 if ((tick - player.data.lastPlayedFlySoundTick) >= FLY_SOUND_DURATION_TICKS && player.data.ticksAirborne >= FLY_SOUND_AIRBORNE_TICKS_THRESHOLD) {
                     player.data.lastPlayedFlySoundTick = tick
                     player.stopSound(flySound)
                     player.playSound(flySound)
+                }
+
+                if (player.position.y <= (END_Y + 16)) {
+                    if (!player.data.moving) {
+                        player.data.moving = true
+                        coroutineScope {
+                            async {
+                                moveToNextSection(player)
+                            }
+                        }
+                    }
                 }
             }
 
@@ -352,13 +614,16 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
     }
 
     fun generateObstacles() {
-        for (y in START_Y downTo END_Y step 5) {
-            weightedRandom(
-                1.0 to Obstacle.Rectangle,
-                1.0 to Obstacle.Circle,
-                0.1 to Obstacle.Grid,
-                0.05 to Obstacle.Chicken
-            ).generate(instance, y)
+        for (sectionI in 0..<TOTAL_SECTIONS) {
+            val pos = sectionOffset * sectionI.toDouble()
+            for (y in START_Y downTo END_Y step 5) {
+                weightedRandom(
+                    1.0 to Obstacle.Rectangle,
+                    1.0 to Obstacle.Circle,
+                    0.1 to Obstacle.Grid,
+                    0.05 to Obstacle.Chicken
+                ).generate(instance, pos.withY(y.toDouble()).xyz)
+            }
         }
     }
 
@@ -408,7 +673,6 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
                         }
 
                         crystal.remove()
-                        player.sendMessage("Wowzers!")
                         player.playSound(
                             Sound.sound(
                                 SoundEvent.ENTITY_EXPERIENCE_ORB_PICKUP,
@@ -429,24 +693,27 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
             SchedulerManager.scheduleNextTick(::checkCrystal)
         }
 
-        for (y in START_Y - 200 downTo END_Y step 200) {
-            var x = 0
-            var z = 0
-            do {
-                x = (-RADIUS + margin..RADIUS - margin).random()
-                z = (-RADIUS + margin..RADIUS - margin).random()
-            } while (!instance.getBlock(x, y, z).isAir)
+        for (sectionI in 0..<TOTAL_SECTIONS) {
+            val pos = sectionOffset * sectionI.toDouble()
+            for (y in START_Y - 200 downTo END_Y step 200) {
+                var x = 0
+                var z = 0
+                do {
+                    x = pos.x().toInt() + (-RADIUS + margin..RADIUS - margin).random()
+                    z = pos.z().toInt() + (-RADIUS + margin..RADIUS - margin).random()
+                } while (!instance.getBlock(x, y, z).isAir)
 
-            val direction = Pos(0.0, 0.0, 0.0, (-180..180).random().toFloat(), 0f)
-            val rowDirection = direction.withYaw(direction.yaw + 90)
-            var rowPos = Pos(x.toDouble(), y.toDouble(), z.toDouble())
-            for (rowI in 0..2) {
-                var colPos = rowPos
-                for (colI in 0..2) {
-                    spawnCrystal(colPos)
-                    colPos = colPos.add(rowDirection.direction().times(gap))
+                val direction = Pos(0.0, 0.0, 0.0, (-180..180).random().toFloat(), 0f)
+                val rowDirection = direction.withYaw(direction.yaw + 90)
+                var rowPos = Pos(x.toDouble(), y.toDouble(), z.toDouble())
+                for (rowI in 0..2) {
+                    var colPos = rowPos
+                    for (colI in 0..2) {
+                        spawnCrystal(colPos)
+                        colPos = colPos.add(rowDirection.direction().times(gap))
+                    }
+                    rowPos = rowPos.add(direction.direction().times(gap))
                 }
-                rowPos = rowPos.add(direction.direction().times(gap))
             }
         }
     }
@@ -464,8 +731,17 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
 
     fun start() {
         for (player in instance.players) {
+            player.data.state = JamPlayerData.State.PLAYING
             player.noJump = true
             player.gravity = 0.08 / 2.0
+            val zone = sections[0]
+            zone.applyEffect(player)
+            player.showTitle(
+                Title.title(
+                    "${zone.name} Zone".color(TextColor.color(zone.color)).decorate(TextDecoration.BOLD),
+                    zone.description.color(TextColor.color(0x71717a))
+                )
+            )
         }
         setStartBarrier(block = Block.AIR)
         state = State.ONGOING
@@ -496,6 +772,12 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
                 spawnPos.minus(point).withY(0.0).mul(5.0)
                     .add(Random.nextDouble(), 0.0, Random.nextDouble())
             )
+
+            instance.sendGroupedPacket(particle {
+                particle = Particle.BLOCK.withBlock(block)
+                position = Vec(x.toDouble(), y.toDouble(), z.toDouble())
+                count = 5
+            })
 
             this.apply(callback)
         }
@@ -545,6 +827,9 @@ class JamPlayerData {
     var ticksAirborne = 0
     var rollingItem = false
     var isUsingItem = false
+    var moving = false
+    var pink = false
+    var yellow = false
 
     enum class State {
         PLAYING,
@@ -579,10 +864,14 @@ fun start() {
 
     GlobalEventHandler.listen<ItemDropEvent> { isCancelled = true }
 
+    GlobalEventHandler.listen<InventoryPreClickEvent> { isCancelled = true }
+
     JamGame.instance = JamGame.getFirstInstanceOrNew()
     JamGame.generateObstacles()
     JamGame.generateBonus()
     JamGame.setStartBarrier()
+
+    System.setProperty("minestom.chunk-view-distance", 2.toString())
 
     minecraftServer.start(Config.address, Config.port)
 }
@@ -603,3 +892,6 @@ fun <T> weightedRandom(vararg list: Pair<Double, T>): T {
 
     return list[idx].second
 }
+
+val Point.xyz
+    get() = XYZ(x().toInt(), y().toInt(), z().toInt())
