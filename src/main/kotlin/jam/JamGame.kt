@@ -4,16 +4,16 @@ import helio.module.*
 import helio.util.listen
 import kotlinx.coroutines.*
 import net.bladehunt.kotstom.BiomeRegistry
+import net.bladehunt.kotstom.CommandManager
 import net.bladehunt.kotstom.GlobalEventHandler
 import net.bladehunt.kotstom.SchedulerManager
 import net.bladehunt.kotstom.coroutines.MinestomDispatcher
+import net.bladehunt.kotstom.dsl.kommand.kommand
 import net.bladehunt.kotstom.dsl.particle
+import net.bladehunt.kotstom.extension.*
 import net.bladehunt.kotstom.extension.adventure.asComponent
+import net.bladehunt.kotstom.extension.adventure.asMini
 import net.bladehunt.kotstom.extension.adventure.color
-import net.bladehunt.kotstom.extension.asVec
-import net.bladehunt.kotstom.extension.minus
-import net.bladehunt.kotstom.extension.plus
-import net.bladehunt.kotstom.extension.times
 import net.kyori.adventure.bossbar.BossBar
 import net.kyori.adventure.sound.Sound
 import net.kyori.adventure.text.format.TextColor
@@ -47,18 +47,18 @@ import net.minestom.server.potion.PotionEffect
 import net.minestom.server.registry.DynamicRegistry
 import net.minestom.server.sound.SoundEvent
 import net.minestom.server.tag.Tag
-import net.minestom.server.timer.TaskSchedule
 import net.minestom.server.world.DimensionType
 import net.minestom.server.world.biome.Biome
 import net.minestom.server.world.biome.BiomeEffects
 import org.jetbrains.exposed.dao.id.EntityID
 import org.jetbrains.exposed.dao.id.UUIDTable
 import org.jetbrains.exposed.sql.Database
-import org.tinylog.kotlin.Logger
 import java.util.*
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.random.Random
+import kotlin.time.Duration
+import kotlin.time.TimeSource
 
 @RegisterFeature(Instances::class)
 object JamGame : InstanceDefinition<JamGame.Data>(Data) {
@@ -77,6 +77,8 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
     const val TOTAL_SECTIONS = 4
     val sectionOffset = Vec(1000.0, 0.0, 0.0)
 
+    var started = TimeSource.Monotonic.markNow()
+
     override val dimensionType =
         DimensionType.builder().ambientLight(1f).minY(DIMENSION_MIN_Y).height(DIMENSION_HEIGHT).fixedTime(6000)
             .logicalHeight(DIMENSION_HEIGHT).build()
@@ -91,6 +93,16 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
 
     var state = State.WAITING
     lateinit var instance: Instance
+
+    fun generateEndPlatform() {
+        val pos = sectionOffset * (TOTAL_SECTIONS - 1).toDouble()
+        for (x in pos.x.toInt() - RADIUS..pos.x.toInt() + RADIUS) {
+            for (z in pos.z.toInt() - RADIUS..pos.z.toInt() + RADIUS) {
+                instance.setBlock(x, END_Y - 32, z, Block.GRASS_BLOCK)
+            }
+        }
+        instance.setBlock(pos.x.toInt(), END_Y - 32 + 1, pos.z.toInt(), Block.CAKE)
+    }
 
     private fun makeZoneBiome(color: Int): DynamicRegistry.Key<Biome> =
         BiomeRegistry.register(
@@ -177,7 +189,7 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
                 }
 
                 GREEN -> {
-                    player.sendPacket(WorldBorderLerpSizePacket(RADIUS * 2.0, RADIUS.toDouble() / 2.0, 1000))
+                    player.sendPacket(WorldBorderLerpSizePacket(RADIUS * 2.0, RADIUS.toDouble() / 2.0, 100))
                 }
 
                 YELLOW -> {
@@ -205,7 +217,7 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
                 }
 
                 GREEN -> {
-                    player.sendPacket(WorldBorderLerpSizePacket(RADIUS.toDouble() / 2.0, RADIUS * 2.0, 1000))
+                    player.sendPacket(WorldBorderLerpSizePacket(RADIUS.toDouble() / 2.0, RADIUS * 2.0, 100))
                 }
 
                 YELLOW -> {
@@ -226,7 +238,6 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
                 val pos = startPos + Vec(xOffset * 16.0, 0.0, zOffset * 16.0)
                 instance.loadChunk(pos).thenRun {
                     val chunk = instance.getChunkAt(pos)!!
-                    Logger.info("${chunk.chunkX} ${chunk.chunkZ}")
                     for (blockX in 0..15)
                         for (blockZ in 0..15)
                             for (blockY in DIMENSION_MIN_Y..DIMENSION_MAX_Y)
@@ -250,20 +261,21 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
         //sections.forEachIndexed { i, zone -> setSectionZone(i, zone) }
     }
 
-    private suspend fun moveToNextSection(player: Player) {
-        player.data.section += 1
-        if (player.data.section >= TOTAL_SECTIONS) {
-            TODO("You Win")
+    suspend fun moveToNextSection(player: Player) {
+        if (player.data.section + 1 >= TOTAL_SECTIONS) {
+            player.inventory.clear()
+            val time = started.elapsedNow()
+            player.sendMessage("<yellow>${player.username}</yellow> reached the bottom in <yellow>${time.neat}</yellow>!".asMini())
             return
         }
 
+        player.data.section += 1
+
         sections[player.data.section - 1].unapplyEffect(player)
         val zone = sections[player.data.section]
-        zone.applyEffect(player)
 
         val pos = sectionOffset * player.data.section.toDouble()
         player.addEffect(Potion(PotionEffect.BLINDNESS, 3, 20 * 3))
-        delay(1500)
         for (entity in instance.entities) {
             if (player in entity.passengers) {
                 entity.removePassenger(player)
@@ -275,18 +287,22 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
         player.teleport(
             (player.position.sub(sectionOffset * player.data.section.dec().toDouble())).add(pos)
                 .withY((START_Y + START_BARRIER_Y_OFFSET + 100 + 1).toDouble())
+                //.withX { if (zone == Zone.GREEN) it.coerceIn(pos.x() + (-RADIUS / 2.0)..pos.x() + (RADIUS / 2.0)) else it }
+                //.withZ { if (zone == Zone.GREEN) it.coerceIn(pos.z() + (-RADIUS / 2.0)..pos.z() + (RADIUS / 2.0)) else it }
+                .withX { if (zone == Zone.GREEN) pos.x() else it }
+                .withZ { if (zone == Zone.GREEN) pos.z() else it }
         )
-        SchedulerManager.scheduleTask({
+        SchedulerManager.scheduleNextTick {
             player.sendPacket(WorldBorderCenterPacket(pos.x(), pos.z()))
-            TaskSchedule.stop()
-        }, TaskSchedule.seconds(1))
+            zone.applyEffect(player)
+        }
         player.showTitle(
             Title.title(
                 "${zone.name} Zone".color(TextColor.color(zone.color)).decorate(TextDecoration.BOLD),
                 zone.description.color(TextColor.color(0x71717a))
             )
         )
-        delay(1500)
+        delay(3000)
         player.data.moving = false
     }
 
@@ -463,7 +479,7 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
     }
 
     override fun onCreateInstanceContainer(instanceContainer: InstanceContainer): InstanceContainer {
-        instanceContainer.worldBorder = WorldBorder((RADIUS * 2).toDouble(), 0.0, 0.0, 0, 0)
+        //instanceContainer.worldBorder = WorldBorder((RADIUS * 2).toDouble(), 0.0, 0.0, 0, 0)
         instanceContainer.timeRate = 0
 
         generateSections()
@@ -489,24 +505,26 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
     override suspend fun PlayerMoveEvent.handle(data: Data) {
         when (state) {
             State.ONGOING -> {
-                if (isOnGround) {
+                if (isOnGround && !player.data.moving) {
                     player.teleport(player.position.sub(0.0, 0.25, 0.0))
-                    player.playSound(
+                    instance.playSound(
                         Sound.sound(
                             SoundEvent.ENTITY_ZOMBIE_BREAK_WOODEN_DOOR,
                             Sound.Source.AMBIENT,
                             1f,
-                            1f
-                        )
+                            if (player.getAttribute(Attribute.GENERIC_SCALE).baseValue > 1.0) 0.75f else 1f
+                        ),
+                        Sound.Emitter.self()
                     )
                     if (!player.data.yellow) {
                         player.damage(DamageType.FALL, 0f)
                     }
 
-                    breakBlocksAroundPoint(newPosition)
+                    val zone = sections[player.data.section]
+                    breakBlocksAroundPoint(newPosition, range = if (zone == Zone.BLUE) 1.5 else 0.5)
 
                     if (player.data.yellow) {
-                        player.velocity = player.velocity.withY(-50.0)
+                        player.velocity = player.velocity.withY { it - 50.0 }
                     }
                 }
             }
@@ -541,7 +559,13 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
             }
         }
 
+        val elapsed = started.elapsedNow()
+        val actionBar =
+            String.format(Locale.US, "%02d:%05.2f", elapsed.inWholeMinutes, elapsed.inWholeMilliseconds / 1000.0)
+                .asComponent()
         for (player in instance.players) {
+            player.sendActionBar(actionBar)
+
             val bar = bossbars.getOrPut(player.uuid) {
                 val zone = sections[player.data.section]
                 BossBar.bossBar(
@@ -575,7 +599,7 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
                 }
             }
 
-            if (player.isOnGround) {
+            if (player.isOnGround && !player.data.yellow) {
                 player.data.ticksAirborne = 0
                 player.data.lastPlayedFlySoundTick = -999
                 player.stopSound(flySound)
@@ -589,6 +613,10 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
 
     override suspend fun PlayerSpawnEvent.handle(data: Data) = coroutineScope {
         if (isFirstSpawn) {
+            player.sendPacket(
+                WorldBorder((RADIUS * 2).toDouble(), 0.0, 0.0, 0, 0).createInitializePacket(RADIUS * 2.0, 100)
+            )
+
             when (state) {
                 State.WAITING -> {
                     player.gameMode = GameMode.ADVENTURE
@@ -615,8 +643,9 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
 
     fun generateObstacles() {
         for (sectionI in 0..<TOTAL_SECTIONS) {
+            val zone = sections[sectionI]
             val pos = sectionOffset * sectionI.toDouble()
-            for (y in START_Y downTo END_Y step 5) {
+            for (y in START_Y downTo END_Y step (if (zone == Zone.PURPLE) 2 else 5)) {
                 weightedRandom(
                     1.0 to Obstacle.Rectangle,
                     1.0 to Obstacle.Circle,
@@ -627,35 +656,40 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
         }
     }
 
+    suspend fun giveItem(player: Player) {
+        if (player.data.rollingItem) {
+            return
+        }
+        player.data.rollingItem = true
+
+        for (i in 0..20) {
+            player.playSound(
+                Sound.sound(SoundEvent.BLOCK_LEVER_CLICK, Sound.Source.NEUTRAL, 1f, 1f),
+                Sound.Emitter.self()
+            )
+            delay(50)
+        }
+        player.playSound(
+            Sound.sound(
+                SoundEvent.ENTITY_EXPERIENCE_ORB_PICKUP,
+                Sound.Source.AMBIENT,
+                1f,
+                1f
+            ),
+            Sound.Emitter.self()
+        )
+        player.inventory.clear()
+        val item = getRandomItem()
+        for (i in 0..8) {
+            player.inventory.addItemStack(item.withTag(Tag.UUID("distinct"), UUID.randomUUID()))
+        }
+
+        player.data.rollingItem = false
+    }
+
     fun generateBonus() {
         val margin = 10
         val gap = 10.0
-
-        suspend fun giveItem(player: Player) {
-            if (player.data.rollingItem) {
-                return
-            }
-            player.data.rollingItem = true
-
-            for (i in 0..20) {
-                player.playSound(Sound.sound(SoundEvent.BLOCK_LEVER_CLICK, Sound.Source.NEUTRAL, 1f, 1f))
-                delay(50)
-            }
-            player.playSound(
-                Sound.sound(
-                    SoundEvent.ENTITY_EXPERIENCE_ORB_PICKUP,
-                    Sound.Source.AMBIENT,
-                    1f,
-                    1f
-                )
-            )
-            player.inventory.clear()
-            for (i in 0..8) {
-                player.inventory.addItemStack(getRandomItem().withTag(Tag.UUID("distinct"), UUID.randomUUID()))
-            }
-
-            player.data.rollingItem = false
-        }
 
         fun spawnCrystal(pos: Pos) {
             val crystal = Entity(EntityType.END_CRYSTAL)
@@ -679,7 +713,8 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
                                 Sound.Source.AMBIENT,
                                 1f,
                                 1f
-                            )
+                            ),
+                            Sound.Emitter.self()
                         )
                         CoroutineScope(MinestomDispatcher).launch { giveItem(player) }
                         break
@@ -720,18 +755,35 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
 
     suspend fun countdown() {
         instance.showTitle(Title.title("3".asComponent(), "".asComponent()))
+        instance.playSound(
+            Sound.sound(SoundEvent.BLOCK_NOTE_BLOCK_BELL, Sound.Source.AMBIENT, 1f, 1f),
+            Sound.Emitter.self()
+        )
         delay(1000)
         instance.showTitle(Title.title("2".asComponent(), "".asComponent()))
+        instance.playSound(
+            Sound.sound(SoundEvent.BLOCK_NOTE_BLOCK_BELL, Sound.Source.AMBIENT, 1f, 1f),
+            Sound.Emitter.self()
+        )
         delay(1000)
         instance.showTitle(Title.title("1".asComponent(), "".asComponent()))
+        instance.playSound(
+            Sound.sound(SoundEvent.BLOCK_NOTE_BLOCK_BELL, Sound.Source.AMBIENT, 1f, 1f),
+            Sound.Emitter.self()
+        )
         delay(1000)
         instance.showTitle(Title.title("Go!".asComponent(), "".asComponent()))
+        instance.playSound(
+            Sound.sound(SoundEvent.ENTITY_EXPERIENCE_ORB_PICKUP, Sound.Source.AMBIENT, 1f, 1f),
+            Sound.Emitter.self()
+        )
         start()
     }
 
     fun start() {
         for (player in instance.players) {
             player.data.state = JamPlayerData.State.PLAYING
+            player.data.moving = false
             player.noJump = true
             player.gravity = 0.08 / 2.0
             val zone = sections[0]
@@ -745,6 +797,7 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
         }
         setStartBarrier(block = Block.AIR)
         state = State.ONGOING
+        started = TimeSource.Monotonic.markNow()
     }
 
     fun reset() {
@@ -860,6 +913,11 @@ fun start() {
     GlobalEventHandler.listen<AsyncPlayerConfigurationEvent> {
         spawningInstance = JamGame.instance
         player.respawnPoint = JamGame.defaultSpawnPoint
+
+
+        //player.sendPacket(
+        //    WorldBorder((RADIUS * 2).toDouble(), 0.0, 0.0, 0, 0).createInitializePacket(0.0, 0)
+        //)
     }
 
     GlobalEventHandler.listen<ItemDropEvent> { isCancelled = true }
@@ -870,8 +928,26 @@ fun start() {
     JamGame.generateObstacles()
     JamGame.generateBonus()
     JamGame.setStartBarrier()
+    JamGame.generateEndPlatform()
 
     System.setProperty("minestom.chunk-view-distance", 2.toString())
+
+    listOf(
+        kommand {
+            name = "item"
+
+            defaultExecutorAsync {
+                JamGame.giveItem(player)
+            }
+        },
+        kommand {
+            name = "next"
+
+            defaultExecutorAsync {
+                JamGame.moveToNextSection(player)
+            }
+        }
+    ).forEach { CommandManager.register(it) }
 
     minecraftServer.start(Config.address, Config.port)
 }
@@ -895,3 +971,7 @@ fun <T> weightedRandom(vararg list: Pair<Double, T>): T {
 
 val Point.xyz
     get() = XYZ(x().toInt(), y().toInt(), z().toInt())
+
+val Duration.neat: String
+    get() =
+        String.format(Locale.US, "%02d:%05.2f", inWholeMinutes, (inWholeMilliseconds / 1000.0) % 60.0)
