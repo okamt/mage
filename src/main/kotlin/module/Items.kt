@@ -1,5 +1,8 @@
 package helio.module
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import net.bladehunt.kotstom.coroutines.MinestomDispatcher
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.TextDecoration
 import net.minestom.server.component.DataComponentMap
@@ -106,7 +109,7 @@ abstract class ItemDefinition<DATA : ItemData>(
         is PickupExperienceEvent -> event.handle(getData(itemStack))
         is PickupItemEvent -> event.handle(getData(itemStack))
 
-        is PlayerUseItemEvent -> event.handle(getData(itemStack))
+        is PlayerUseItemEvent -> CoroutineScope(MinestomDispatcher).launch { event.handle(getData(itemStack)) }
         is PlayerBlockPlaceEvent -> event.handle(getData(itemStack))
         is PlayerItemAnimationEvent -> event.handle(getData(itemStack))
 
@@ -120,7 +123,7 @@ abstract class ItemDefinition<DATA : ItemData>(
     open fun PickupExperienceEvent.handle(data: DATA) {}
     open fun PickupItemEvent.handle(data: DATA) {}
 
-    open fun PlayerUseItemEvent.handle(data: DATA) {}
+    open suspend fun PlayerUseItemEvent.handle(data: DATA) {}
     open fun PlayerBlockPlaceEvent.handle(data: DATA) {
         isCancelled = true
     }
