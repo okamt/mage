@@ -2,12 +2,13 @@ package helio.jam
 
 import helio.module.*
 import helio.util.listen
+import helio.util.only
 import kotlinx.coroutines.*
-import net.bladehunt.kotstom.BiomeRegistry
-import net.bladehunt.kotstom.CommandManager
-import net.bladehunt.kotstom.GlobalEventHandler
-import net.bladehunt.kotstom.SchedulerManager
+import kotlinx.coroutines.future.asDeferred
+import kotlinx.coroutines.sync.Mutex
+import net.bladehunt.kotstom.*
 import net.bladehunt.kotstom.coroutines.MinestomDispatcher
+import net.bladehunt.kotstom.dsl.kommand.buildSyntax
 import net.bladehunt.kotstom.dsl.kommand.kommand
 import net.bladehunt.kotstom.dsl.particle
 import net.bladehunt.kotstom.extension.*
@@ -20,6 +21,7 @@ import net.kyori.adventure.text.format.TextColor
 import net.kyori.adventure.text.format.TextDecoration
 import net.kyori.adventure.title.Title
 import net.minestom.server.MinecraftServer
+import net.minestom.server.command.builder.arguments.ArgumentString
 import net.minestom.server.coordinate.Point
 import net.minestom.server.coordinate.Pos
 import net.minestom.server.coordinate.Vec
@@ -33,7 +35,7 @@ import net.minestom.server.entity.metadata.other.FallingBlockMeta
 import net.minestom.server.event.inventory.InventoryPreClickEvent
 import net.minestom.server.event.item.ItemDropEvent
 import net.minestom.server.event.player.AsyncPlayerConfigurationEvent
-import net.minestom.server.event.player.PlayerMoveEvent
+import net.minestom.server.event.player.PlayerDisconnectEvent
 import net.minestom.server.event.player.PlayerSpawnEvent
 import net.minestom.server.instance.Instance
 import net.minestom.server.instance.InstanceContainer
@@ -45,6 +47,7 @@ import net.minestom.server.particle.Particle
 import net.minestom.server.potion.Potion
 import net.minestom.server.potion.PotionEffect
 import net.minestom.server.registry.DynamicRegistry
+import net.minestom.server.scoreboard.Sidebar
 import net.minestom.server.sound.SoundEvent
 import net.minestom.server.tag.Tag
 import net.minestom.server.world.DimensionType
@@ -64,6 +67,8 @@ import kotlin.time.TimeSource
 object JamGame : InstanceDefinition<JamGame.Data>(Data) {
     const val ID = "gameInstance"
     override val id = Id(ID)
+
+    const val PLAYERS_TO_START = 1
 
     const val RADIUS = 32
     const val DIMENSION_MAX_Y = 1007
@@ -261,12 +266,56 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
         //sections.forEachIndexed { i, zone -> setSectionZone(i, zone) }
     }
 
-    suspend fun moveToNextSection(player: Player) {
+    suspend fun done() {
+        val top3 = instance.players
+            .filter { it.data.state == JamPlayerData.State.PLAYING }
+            .map { it to it.data.time!! }
+            .sortedWith(compareBy<Pair<Player, Duration>> { it.second })
+            .take(3)
+
+        fun getBadge(pos: Int): String = when (pos) {
+            1 -> "<yellow>"
+            2 -> "<gray>"
+            3 -> "<#964B00>"
+            else -> error("No badge for ${pos.ordinal()} place.")
+        } + "[${pos.ordinal()}]<reset>"
+
+        instance.sendMessage(
+            "\n     <bold>RESULTS</bold>\n\n${
+                top3.mapIndexed { i, pair ->
+                    "     " + getBadge(i + 1) + " " + pair.first.username + " in " + pair.second.neat + "\n"
+                }
+                    .joinToString("")
+            }".asMini()
+        )
+        delay(1000 * 5)
+        instance.sendMessage("Restarting in 10 seconds!".asComponent())
+        delay(1000 * 10)
+        reset()
+    }
+
+    suspend fun moveToNextSection(player: Player) = coroutineScope {
         if (player.data.section + 1 >= TOTAL_SECTIONS) {
             player.inventory.clear()
             val time = started.elapsedNow()
-            player.sendMessage("<yellow>${player.username}</yellow> reached the bottom in <yellow>${time.neat}</yellow>!".asMini())
-            return
+            instance.sendMessage("<yellow>${player.username}</yellow> reached the bottom in <yellow>${time.neat}</yellow>!".asMini())
+            val zone = sections[player.data.section]
+            zone.unapplyEffect(player)
+            player.noJump = false
+            player.data.time = time
+            player.isGlowing = false
+            player.gravity = 0.08
+
+            player.playSound(
+                Sound.sound(SoundEvent.BLOCK_NOTE_BLOCK_BELL, Sound.Source.AMBIENT, 1f, 1f),
+                Sound.Emitter.self()
+            )
+
+            if (instance.players.filter { it.data.state == JamPlayerData.State.PLAYING }.all { it.data.time != null }) {
+                launch { done() }
+            }
+
+            return@coroutineScope
         }
 
         player.data.section += 1
@@ -497,39 +546,32 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
             }
         }
 
-        setStartBarrier(instanceContainer)
+        instance = instanceContainer
+
+        generateObstacles()
+        generateBonus()
+        setStartBarrier()
+        generateEndPlatform()
 
         return instanceContainer
     }
 
-    override suspend fun PlayerMoveEvent.handle(data: Data) {
-        when (state) {
-            State.ONGOING -> {
-                if (isOnGround && !player.data.moving) {
-                    player.teleport(player.position.sub(0.0, 0.25, 0.0))
-                    instance.playSound(
-                        Sound.sound(
-                            SoundEvent.ENTITY_ZOMBIE_BREAK_WOODEN_DOOR,
-                            Sound.Source.AMBIENT,
-                            1f,
-                            if (player.getAttribute(Attribute.GENERIC_SCALE).baseValue > 1.0) 0.75f else 1f
-                        ),
-                        Sound.Emitter.self()
-                    )
-                    if (!player.data.yellow) {
-                        player.damage(DamageType.FALL, 0f)
-                    }
+    fun getHeight(player: Player): Float = when (player.data.state) {
+        JamPlayerData.State.PLAYING -> {
+            val oneSection = 1f / TOTAL_SECTIONS
+            val playerDepthInCurrentSection =
+                ((1f - ((player.position.y.toFloat().coerceIn(
+                    END_Y.toFloat(),
+                    START_Y.toFloat()
+                ) - END_Y) / (START_Y - END_Y))) / TOTAL_SECTIONS).coerceIn(0f..oneSection)
+            // 2000 -2000  2000 = 0
+            // 2000 -2000  1000 = 0.25
+            // 2000 -2000  0 = 0.5
+            1f - (oneSection * player.data.section.toFloat() + playerDepthInCurrentSection).coerceIn(0f..1f)
+        }
 
-                    val zone = sections[player.data.section]
-                    breakBlocksAroundPoint(newPosition, range = if (zone == Zone.BLUE) 1.5 else 0.5)
-
-                    if (player.data.yellow) {
-                        player.velocity = player.velocity.withY { it - 50.0 }
-                    }
-                }
-            }
-
-            State.WAITING -> {}
+        JamPlayerData.State.SPECTATING -> {
+            1f
         }
     }
 
@@ -540,42 +582,32 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
     const val FLY_SOUND_DURATION_TICKS = 20 * 10
 
     override suspend fun onTick() {
-        fun getBossbarProgress(player: Player): Float = when (player.data.state) {
-            JamPlayerData.State.PLAYING -> {
-                val oneSection = 1f / TOTAL_SECTIONS
-                val playerDepthInCurrentSection =
-                    ((1f - ((player.position.y.toFloat().coerceIn(
-                        END_Y.toFloat(),
-                        START_Y.toFloat()
-                    ) - END_Y) / (START_Y - END_Y))) / TOTAL_SECTIONS).coerceIn(0f..oneSection)
-                // 2000 -2000  2000 = 0
-                // 2000 -2000  1000 = 0.25
-                // 2000 -2000  0 = 0.5
-                1f - (oneSection * player.data.section.toFloat() + playerDepthInCurrentSection).coerceIn(0f..1f)
-            }
-
-            JamPlayerData.State.SPECTATING -> {
-                1f
-            }
-        }
-
         val elapsed = started.elapsedNow()
-        val actionBar =
-            String.format(Locale.US, "%02d:%05.2f", elapsed.inWholeMinutes, elapsed.inWholeMilliseconds / 1000.0)
-                .asComponent()
+        val actionBar = elapsed.neat.asComponent()
+        var heights = mutableListOf<Pair<Player, Float>>()
+
         for (player in instance.players) {
-            player.sendActionBar(actionBar)
+            val height = getHeight(player)
+            if (state == State.ONGOING && player.data.state == JamPlayerData.State.PLAYING) {
+                heights.add(player to height)
+            }
+            val playerTime = player.data.time
+            if (playerTime != null) {
+                player.sendActionBar(playerTime.neat.asComponent())
+            } else {
+                player.sendActionBar(actionBar)
+            }
 
             val bar = bossbars.getOrPut(player.uuid) {
                 val zone = sections[player.data.section]
                 BossBar.bossBar(
                     "Height".color(TextColor.color(zone.color)),
-                    getBossbarProgress(player),
+                    height,
                     zone.bossbarColor,
                     BossBar.Overlay.PROGRESS
                 ).addViewer(player)
             }
-            bar.progress(getBossbarProgress(player))
+            bar.progress(height)
             val zone = sections[player.data.section]
             bar.color(zone.bossbarColor)
             bar.name("Height".color(TextColor.color(zone.color)))
@@ -599,6 +631,29 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
                 }
             }
 
+            if (state == State.ONGOING && player.data.state == JamPlayerData.State.PLAYING && player.isOnGround && !player.data.moving) {
+                val zone = sections[player.data.section]
+                val brokeAnything = breakBlocksAroundPoint(player.position, range = if (zone == Zone.BLUE) 1.5 else 0.5)
+                if (brokeAnything) {
+                    player.teleport(player.position.sub(0.0, 0.25, 0.0))
+                    player.playSound(
+                        Sound.sound(
+                            SoundEvent.ENTITY_ZOMBIE_BREAK_WOODEN_DOOR,
+                            Sound.Source.AMBIENT,
+                            1f,
+                            if (player.getAttribute(Attribute.GENERIC_SCALE).baseValue > 1.0) 0.75f else 1f
+                        ),
+                        Sound.Emitter.self()
+                    )
+                    if (!player.data.yellow) {
+                        player.damage(DamageType.FALL, 0f)
+                    }
+                    if (player.data.yellow) {
+                        player.velocity = player.velocity.withY { it - 50.0 }
+                    }
+                }
+            }
+
             if (player.isOnGround && !player.data.yellow) {
                 player.data.ticksAirborne = 0
                 player.data.lastPlayedFlySoundTick = -999
@@ -608,27 +663,119 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
             }
         }
 
+        val sortedHeights = heights.sortedWith(compareBy<Pair<Player, Float>> { it.second }.reversed())
+        val gotIt = mutableSetOf<Player>()
+        for (player in instance.players) {
+            val sidebar = player.data.sidebar
+            if (!sidebar.isViewer(player)) {
+                sidebar.addViewer(player)
+            }
+
+            //fun heightToLine(height: Float): Int = (1_000_000.0 * height).roundToInt()
+
+            if (sidebar.lines.isEmpty() || instance.players.any { player1 -> player1.data.state == JamPlayerData.State.PLAYING && player1.uuid.toString() !in sidebar.lines.map { it.id } }) {
+                for (line in sidebar.lines) {
+                    sidebar.removeLine(line.id)
+                }
+                var i = sortedHeights.size
+                for ((player2, height) in sortedHeights) {
+                    sidebar.createLine(
+                        Sidebar.ScoreboardLine(
+                            player2.uuid.toString(),
+                            if (player == player2) "<yellow>${player2.username}".asMini() else "<white>${player2.username}".asMini(),
+                            i
+                        )
+                    )
+                    i -= 1
+                }
+            } else {
+                var i = sortedHeights.size
+                for (line in sidebar.lines) {
+                    val player1 = instance.players.find { line.id == it.uuid.toString() }
+                    if (player1 == null || player1.data.state == JamPlayerData.State.SPECTATING || player1.gameMode == GameMode.SPECTATOR) {
+                        sidebar.removeLine(line.id)
+                    }
+                }
+                var lastPlayer: Player? = null
+                for ((player2, height) in sortedHeights) {
+                    val line = sidebar.getLine(player2.uuid.toString())!!
+                    val player = instance.players.find { it.uuid.toString() == line.id }
+                    if (player == null) {
+                        sidebar.lines.remove(line)
+                        continue
+                    } else {
+                        val height = heights.find { it.first == player } ?: continue
+                        val oldScore = line.line
+                        sidebar.updateLineScore(line.id, i)
+                        if (player2 == player && !player.data.moving) {
+                            if (oldScore > i && lastPlayer != null && !lastPlayer.data.moving && player !in gotIt) {
+                                player.sendMessage("<green>You passed ${lastPlayer.username}! (now in ${i.ordinal()})".asMini())
+                                player.playSound(
+                                    Sound.sound(
+                                        SoundEvent.BLOCK_NOTE_BLOCK_BELL,
+                                        Sound.Source.AMBIENT,
+                                        1f,
+                                        1f
+                                    )
+                                )
+                                gotIt.add(player)
+                            } else if (oldScore < i) {
+                                val nextPlayer =
+                                    sortedHeights.getOrNull(sortedHeights.indexOfFirst { it.first == player2 } + 1)?.first
+                                if (nextPlayer != null && !nextPlayer.data.moving && player !in gotIt) {
+                                    player.sendMessage("<red>${nextPlayer.username} passed you! (now in ${i.ordinal()})".asMini())
+                                    player.playSound(
+                                        Sound.sound(
+                                            SoundEvent.BLOCK_NOTE_BLOCK_BELL,
+                                            Sound.Source.AMBIENT,
+                                            1f,
+                                            0.5f
+                                        )
+                                    )
+                                    gotIt.add(player)
+                                }
+                            }
+                        }
+                    }
+                    i -= 1
+                    lastPlayer = player2
+                }
+            }
+        }
+
         tick += 1
     }
 
+    var starting = Mutex()
+
     override suspend fun PlayerSpawnEvent.handle(data: Data) = coroutineScope {
-        if (isFirstSpawn) {
-            player.sendPacket(
-                WorldBorder((RADIUS * 2).toDouble(), 0.0, 0.0, 0, 0).createInitializePacket(RADIUS * 2.0, 100)
-            )
+        if (!player.data.sidebar.isViewer(player)) {
+            player.data.sidebar.addViewer(player)
+        }
 
-            when (state) {
-                State.WAITING -> {
-                    player.gameMode = GameMode.ADVENTURE
-                    player.data.state = JamPlayerData.State.PLAYING
-                    // TODO: Add logic to check if enough players
-                    start()
-                }
+        player.sendPacket(
+            WorldBorder((RADIUS * 2).toDouble(), 0.0, 0.0, 0, 0).createInitializePacket(RADIUS * 2.0, 100)
+        )
 
-                State.ONGOING -> {
-                    player.gameMode = GameMode.SPECTATOR
-                    player.data.state = JamPlayerData.State.SPECTATING
+        when (state) {
+            State.WAITING -> {
+                player.gameMode = GameMode.ADVENTURE
+                player.data.state = JamPlayerData.State.PLAYING
+
+                instance.sendMessage("<yellow>${player.username}</yellow> has joined the game.".asMini())
+
+                if (ConnectionManager.onlinePlayerCount >= PLAYERS_TO_START && starting.tryLock()) {
+                    launch {
+                        countdown()
+                        //start()
+                        starting.unlock()
+                    }
                 }
+            }
+
+            State.ONGOING -> {
+                player.gameMode = GameMode.SPECTATOR
+                player.data.state = JamPlayerData.State.SPECTATING
             }
         }
     }
@@ -688,7 +835,7 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
     }
 
     fun generateBonus() {
-        val margin = 10
+        val margin = 12
         val gap = 10.0
 
         fun spawnCrystal(pos: Pos) {
@@ -754,40 +901,46 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
     }
 
     suspend fun countdown() {
-        instance.showTitle(Title.title("3".asComponent(), "".asComponent()))
-        instance.playSound(
-            Sound.sound(SoundEvent.BLOCK_NOTE_BLOCK_BELL, Sound.Source.AMBIENT, 1f, 1f),
-            Sound.Emitter.self()
-        )
-        delay(1000)
-        instance.showTitle(Title.title("2".asComponent(), "".asComponent()))
-        instance.playSound(
-            Sound.sound(SoundEvent.BLOCK_NOTE_BLOCK_BELL, Sound.Source.AMBIENT, 1f, 1f),
-            Sound.Emitter.self()
-        )
-        delay(1000)
-        instance.showTitle(Title.title("1".asComponent(), "".asComponent()))
-        instance.playSound(
-            Sound.sound(SoundEvent.BLOCK_NOTE_BLOCK_BELL, Sound.Source.AMBIENT, 1f, 1f),
-            Sound.Emitter.self()
-        )
-        delay(1000)
-        instance.showTitle(Title.title("Go!".asComponent(), "".asComponent()))
-        instance.playSound(
-            Sound.sound(SoundEvent.ENTITY_EXPERIENCE_ORB_PICKUP, Sound.Source.AMBIENT, 1f, 1f),
-            Sound.Emitter.self()
-        )
+        for (i in 10 downTo 1) {
+            if (instance.players.size == 0) {
+                return
+            }
+
+            instance.playSound(
+                Sound.sound(SoundEvent.BLOCK_LEVER_CLICK, Sound.Source.AMBIENT, 1f, 1f),
+                Sound.Emitter.self()
+            )
+            instance.sendMessage("Starting in $i seconds.".asComponent())
+
+            if (i in 1..3) {
+                instance.playSound(
+                    Sound.sound(SoundEvent.BLOCK_NOTE_BLOCK_BELL, Sound.Source.AMBIENT, 1f, 1f),
+                    Sound.Emitter.self()
+                )
+                instance.showTitle(Title.title(i.toString().asComponent(), "".asComponent()))
+            }
+
+            delay(1000)
+        }
         start()
     }
 
     fun start() {
+        if (instance.players.size == 0) {
+            return
+        }
+
         for (player in instance.players) {
             player.data.state = JamPlayerData.State.PLAYING
             player.data.moving = false
             player.noJump = true
             player.gravity = 0.08 / 2.0
+            player.isGlowing = true
             val zone = sections[0]
             zone.applyEffect(player)
+            if (zone == Zone.GREEN) {
+                player.teleport(player.position.withX(0.0).withZ(0.0))
+            }
             player.showTitle(
                 Title.title(
                     "${zone.name} Zone".color(TextColor.color(zone.color)).decorate(TextDecoration.BOLD),
@@ -800,21 +953,36 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
         started = TimeSource.Monotonic.markNow()
     }
 
-    fun reset() {
+    suspend fun reset() {
         for (player in instance.players) {
             player.noJump = false
             player.gravity = 0.08
+            player.isGlowing = false
+            val zone = sections[player.data.section]
+            zone.unapplyEffect(player)
+            player.data.sidebar.removeViewer(player)
+            JamPlayerData.writeData(player.uuid) {}
         }
-        setStartBarrier()
         state = State.WAITING
+        val oldInstance = instance
+        instance = JamGame.createInstanceContainer()
+        oldInstance.players.map { it.setInstance(instance, defaultSpawnPoint).asDeferred() }.awaitAll()
+        InstanceManager.unregisterInstance(oldInstance)
     }
 
-    fun breakBlocksAroundPoint(point: Point, range: Double = 0.5, callback: XYZ.() -> Unit = {}) {
-        point.forEachBlockAround(range) {
+    fun breakBlocksAroundPoint(
+        point: Point,
+        range: Double = 0.5,
+        tnt: Boolean = false,
+        callback: XYZ.() -> Unit = {}
+    ): Boolean {
+        var brokeAnything = false
+        point.forEachBlockAround(range, tnt) {
             val block = instance.getBlock(x, y, z)
-            if (block == Block.BARRIER) {
+            if (block == Block.BARRIER || block.isAir) {
                 return@forEachBlockAround
             }
+            brokeAnything = true
             val fallingBlock = Entity(EntityType.FALLING_BLOCK)
             val meta = fallingBlock.entityMeta as FallingBlockMeta
             meta.block = block
@@ -834,6 +1002,7 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
 
             this.apply(callback)
         }
+        return brokeAnything
     }
 }
 
@@ -861,10 +1030,11 @@ data class XYZ(
     val z: Int,
 )
 
-fun Point.forEachBlockAround(range: Double = 0.5, block: XYZ.() -> Unit) {
+fun Point.forEachBlockAround(range: Double = 0.5, tnt: Boolean = false, block: XYZ.() -> Unit) {
+    val extraY = if (tnt) 20.0 else 0.0
     for (x in floor(x() - range).toInt()..ceil(x() + range).toInt()) {
         for (z in floor(z() - range).toInt()..ceil(z() + range).toInt()) {
-            for (y in floor(y() - range).toInt()..ceil(y() + range).toInt()) {
+            for (y in floor(y() - range - extraY).toInt()..ceil(y() + range + extraY).toInt()) {
                 XYZ(x, y, z).apply(block)
             }
         }
@@ -883,6 +1053,8 @@ class JamPlayerData {
     var moving = false
     var pink = false
     var yellow = false
+    var time: Duration? = null
+    var sidebar = Sidebar("<rainbow><bold>FREE FALL".asMini())
 
     enum class State {
         PLAYING,
@@ -907,46 +1079,68 @@ val db = Database.connect(Config.databaseURL, driver = Config.databaseDriver)
 fun start() {
     val minecraftServer = MinecraftServer.init()
 
-    registerAllBuiltinModules(EnumSet.of(BuiltinModuleType.CORE))
+    registerAllBuiltinModules(BuiltinModuleType.CORE.only)
     registerAllAnnotatedFeatures(::start.javaClass.packageName)
 
     GlobalEventHandler.listen<AsyncPlayerConfigurationEvent> {
         spawningInstance = JamGame.instance
         player.respawnPoint = JamGame.defaultSpawnPoint
+    }
 
-
-        //player.sendPacket(
-        //    WorldBorder((RADIUS * 2).toDouble(), 0.0, 0.0, 0, 0).createInitializePacket(0.0, 0)
-        //)
+    GlobalEventHandler.listen<PlayerDisconnectEvent> {
+        JamGame.instance.sendMessage("<yellow>${player.username}</yellow> has left the game.".asMini())
     }
 
     GlobalEventHandler.listen<ItemDropEvent> { isCancelled = true }
 
     GlobalEventHandler.listen<InventoryPreClickEvent> { isCancelled = true }
 
-    JamGame.instance = JamGame.getFirstInstanceOrNew()
-    JamGame.generateObstacles()
-    JamGame.generateBonus()
-    JamGame.setStartBarrier()
-    JamGame.generateEndPlatform()
+    JamGame.createInstanceContainer()
 
     System.setProperty("minestom.chunk-view-distance", 2.toString())
 
     listOf(
         kommand {
-            name = "item"
+            name = "debug_item"
+
+            val item = ArgumentString("item")
 
             defaultExecutorAsync {
                 JamGame.giveItem(player)
             }
+
+            buildSyntax(item) {
+                onlyPlayers()
+                executor {
+                    player.inventory.addItemStack(
+                        when (item().lowercase()) {
+                            "anvil" -> AnvilItem
+                            "ball" -> BallItem
+                            "tnt" -> TNTItem
+                            "dash" -> DashItem
+                            else -> {
+                                player.sendMessage("Invalid item!")
+                                return@executor
+                            }
+                        }.createItemStack()
+                    )
+                }
+            }
         },
         kommand {
-            name = "next"
+            name = "debug_next"
 
             defaultExecutorAsync {
                 JamGame.moveToNextSection(player)
             }
-        }
+        },
+        kommand {
+            name = "debug_reset"
+
+            defaultExecutorAsync {
+                JamGame.reset()
+            }
+        },
     ).forEach { CommandManager.register(it) }
 
     minecraftServer.start(Config.address, Config.port)
@@ -975,3 +1169,11 @@ val Point.xyz
 val Duration.neat: String
     get() =
         String.format(Locale.US, "%02d:%05.2f", inWholeMinutes, (inWholeMilliseconds / 1000.0) % 60.0)
+
+fun Int.ordinal() = "$this" + when {
+    (this % 100 in 11..13) -> "th"
+    (this % 10) == 1 -> "st"
+    (this % 10) == 2 -> "nd"
+    (this % 10) == 3 -> "rd"
+    else -> "th"
+}
