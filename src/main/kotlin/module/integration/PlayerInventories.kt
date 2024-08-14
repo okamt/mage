@@ -1,7 +1,7 @@
 package helio.module.integration
 
 import helio.module.*
-import helio.util.listen
+import helio.util.listenWith
 import net.minestom.server.entity.Player
 import net.minestom.server.event.player.PlayerDisconnectEvent
 import net.minestom.server.event.player.PlayerSpawnEvent
@@ -21,13 +21,13 @@ const val PLAYER_INVENTORY_SIZE = 46
 @BuiltinModule(BuiltinModuleType.INTEGRATION)
 object PlayerInventories : ServerModule("playerInventories") {
     override fun onRegisterModule() {
-        eventNode.listen<PlayerSpawnEvent> {
+        eventNode.listenWith<PlayerSpawnEvent> {
             if (isFirstSpawn) {
                 player.loadInventory()
             }
         }
 
-        eventNode.listen<PlayerDisconnectEvent> {
+        eventNode.listenWith<PlayerDisconnectEvent> {
             player.saveInventory()
         }
     }

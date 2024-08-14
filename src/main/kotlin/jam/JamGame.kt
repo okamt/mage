@@ -1,7 +1,7 @@
 package helio.jam
 
 import helio.module.*
-import helio.util.listen
+import helio.util.listenWith
 import helio.util.only
 import kotlinx.coroutines.*
 import kotlinx.coroutines.future.asDeferred
@@ -1082,18 +1082,18 @@ fun start() {
     registerAllBuiltinModules(BuiltinModuleType.CORE.only)
     registerAllAnnotatedFeatures(::start.javaClass.packageName)
 
-    GlobalEventHandler.listen<AsyncPlayerConfigurationEvent> {
+    GlobalEventHandler.listenWith<AsyncPlayerConfigurationEvent> {
         spawningInstance = JamGame.instance
         player.respawnPoint = JamGame.defaultSpawnPoint
     }
 
-    GlobalEventHandler.listen<PlayerDisconnectEvent> {
+    GlobalEventHandler.listenWith<PlayerDisconnectEvent> {
         JamGame.instance.sendMessage("<yellow>${player.username}</yellow> has left the game.".asMini())
     }
 
-    GlobalEventHandler.listen<ItemDropEvent> { isCancelled = true }
+    GlobalEventHandler.listenWith<ItemDropEvent> { isCancelled = true }
 
-    GlobalEventHandler.listen<InventoryPreClickEvent> { isCancelled = true }
+    GlobalEventHandler.listenWith<InventoryPreClickEvent> { isCancelled = true }
 
     JamGame.createInstanceContainer()
 

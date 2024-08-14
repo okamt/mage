@@ -5,7 +5,7 @@ import helio.module.ItemData
 import helio.module.ItemDefinition
 import helio.module.Items
 import helio.module.RegisterFeature
-import helio.util.listen
+import helio.util.listenWith
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.future.await
 import net.bladehunt.kotstom.SchedulerManager
@@ -150,7 +150,7 @@ object BallItem : ItemDefinition<ItemData.Empty>(ItemData.Empty) {
             ball.remove()
         }
 
-        ball.eventNode().listen<ProjectileCollideWithBlockEvent> {
+        ball.eventNode().listenWith<ProjectileCollideWithBlockEvent> {
             explode()
         }
 
@@ -228,7 +228,7 @@ object TNTItem : ItemDefinition<ItemData.Empty>(ItemData.Empty) {
             tnt.remove()
         }
 
-        tnt.eventNode().listen<ProjectileCollideWithBlockEvent> {
+        tnt.eventNode().listenWith<ProjectileCollideWithBlockEvent> {
             explode()
         }
 

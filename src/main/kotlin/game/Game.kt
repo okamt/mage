@@ -5,7 +5,7 @@ import helio.game.item.ItemSquirter
 import helio.module.integration.PlayerInstances
 import helio.module.registerAllAnnotatedFeatures
 import helio.module.registerAllBuiltinModules
-import helio.util.listen
+import helio.util.listenWith
 import net.bladehunt.kotstom.GlobalEventHandler
 import net.minestom.server.MinecraftServer
 import net.minestom.server.entity.GameMode
@@ -34,8 +34,8 @@ fun start() {
     val after = EventNode.all("after")
     after.priority = 10
 
-    after.listen<PlayerSpawnEvent> {
-        if (!isFirstSpawn) return@listen
+    after.listenWith<PlayerSpawnEvent> {
+        if (!isFirstSpawn) return@listenWith
         player.inventory.addItemStack(ItemSquirter.createItemStack())
         player.gameMode = GameMode.ADVENTURE
         /*player.inventory.addItemStack(
