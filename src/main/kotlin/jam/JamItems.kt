@@ -28,11 +28,14 @@ import net.minestom.server.item.ItemStack
 import net.minestom.server.item.Material
 import net.minestom.server.particle.Particle
 import net.minestom.server.sound.SoundEvent
+import kotlin.math.roundToInt
 
 fun getRandomItem(): ItemStack =
     weightedRandom(
         1.0 to AnvilItem,
-        1.0 to BallItem
+        1.0 to BallItem,
+        1.0 to TNTItem,
+        1.0 to DashItem,
     ).createItemStack()
 
 @RegisterFeature(Items::class)
@@ -69,16 +72,17 @@ object AnvilItem : ItemDefinition<ItemData.Empty>(ItemData.Empty) {
                         count = 1
                     })
                 }
-                player.playSound(
+                instance.playSound(
                     Sound.sound(
                         SoundEvent.ENTITY_GENERIC_EXPLODE,
                         Sound.Source.AMBIENT,
                         1f,
                         1f
-                    )
+                    ),
+                    player.position
                 )
             }
-            anchor.velocity = anchor.velocity.withY(-50.0)
+            anchor.velocity = anchor.velocity.withY(if (player.data.pink) -100.0 else -50.0)
             timer -= 1
             if (timer < 0) {
                 anchor.remove()
@@ -120,7 +124,7 @@ object BallItem : ItemDefinition<ItemData.Empty>(ItemData.Empty) {
         val ball2 = Entity(EntityType.ITEM_DISPLAY)
         val meta = (ball2.entityMeta as ItemDisplayMeta)
         meta.itemStack = ItemStack.of(Material.SNOWBALL)
-        meta.scale = (Vec.ONE * 10.0).asVec()
+        meta.scale = (Vec.ONE * (if (player.data.pink) 20.0 else 10.0)).asVec()
         meta.billboardRenderConstraints = AbstractDisplayMeta.BillboardConstraints.CENTER
         ball2.setNoGravity(true)
         ball2.setInstance(instance, player.position + player.position.direction()).await()
@@ -130,7 +134,7 @@ object BallItem : ItemDefinition<ItemData.Empty>(ItemData.Empty) {
         player.data.isUsingItem = false
 
         fun explode() {
-            val radius = 5
+            val radius = if (player.data.pink) 10 else 5
 
             for (x in ball.position.x.toInt() - radius..ball.position.x.toInt() + radius) {
                 for (y in ball.position.y.toInt() - radius..ball.position.y.toInt() + radius) {
@@ -150,9 +154,11 @@ object BallItem : ItemDefinition<ItemData.Empty>(ItemData.Empty) {
             explode()
         }
 
+        val dir = (player.position.direction() * 50.0).asVec()
+
         fun updateBall() {
             if (!ball.isRemoved) {
-                ball.velocity = (player.position.direction() * 50.0).asVec()
+                ball.velocity = dir
                 SchedulerManager.scheduleNextTick(::updateBall)
             }
         }
@@ -164,5 +170,113 @@ object BallItem : ItemDefinition<ItemData.Empty>(ItemData.Empty) {
         if (!ball.isRemoved) {
             explode()
         }
+    }
+}
+
+@RegisterFeature(Items::class)
+object TNTItem : ItemDefinition<ItemData.Empty>(ItemData.Empty) {
+    override val id = Id("Mega TNT")
+    override val material: Material = Material.TNT
+
+    override suspend fun PlayerUseItemEvent.handle(data: ItemData.Empty) {
+        player.data.isUsingItem = true
+        player.inventory.clear()
+
+        val tnt = EntityProjectile(player, EntityType.SNOWBALL)
+        tnt.velocity = tnt.velocity.withY(player.velocity.y * 1.5)
+        tnt.isInvisible = true
+
+        val actualTnt = Entity(EntityType.FALLING_BLOCK)
+        (actualTnt.entityMeta as FallingBlockMeta).block = Block.TNT
+
+        actualTnt.setInstance(instance, player.position).await()
+        tnt.setInstance(instance, player.position).await()
+        tnt.addPassenger(actualTnt)
+
+        fun explode() {
+            breakBlocksAroundPoint(tnt.position, if (player.data.pink) 10.0 else 5.0, tnt = true) {
+                instance.sendGroupedPacket(particle {
+                    particle = Particle.EXPLOSION
+                    position = Vec(x.toDouble(), y.toDouble(), z.toDouble())
+                    count = 1
+                })
+            }
+            instance.playSound(
+                Sound.sound(
+                    SoundEvent.ENTITY_GENERIC_EXPLODE,
+                    Sound.Source.AMBIENT,
+                    1f,
+                    1f
+                ),
+                tnt.position
+            )
+
+            /*val radius = 10
+
+            for (x in tnt.position.x.toInt() - radius..tnt.position.x.toInt() + radius) {
+                for (y in tnt.position.y.toInt() - radius..tnt.position.y.toInt() + radius) {
+                    for (z in tnt.position.z.toInt() - radius..tnt.position.z.toInt() + radius) {
+                        val vec = Vec(x.toDouble(), y.toDouble(), z.toDouble())
+                        if (vec.distance(tnt.position) <= radius) {
+                            instance.setBlock(x, y, z, Block.AIR)
+                        }
+                    }
+                }
+            }*/
+
+            actualTnt.remove()
+            tnt.remove()
+        }
+
+        tnt.eventNode().listen<ProjectileCollideWithBlockEvent> {
+            explode()
+        }
+
+        player.data.isUsingItem = false
+
+        delay(3000)
+
+        if (!tnt.isRemoved) {
+            explode()
+        }
+    }
+}
+
+@RegisterFeature(Items::class)
+object DashItem : ItemDefinition<ItemData.Empty>(ItemData.Empty) {
+    override val id = Id("Dash")
+    override val material: Material = Material.FEATHER
+
+    override suspend fun PlayerUseItemEvent.handle(data: ItemData.Empty) {
+        player.data.isUsingItem = true
+        player.inventory.clear()
+
+        var ticks = (20 * 1.0).roundToInt()
+        var velocity = if (player.data.pink) 125.0 else 75.0
+
+        fun dash() {
+            if (ticks <= 0) {
+                return
+            } else if (ticks % 2 == 0) {
+                player.playSound(
+                    Sound.sound(
+                        SoundEvent.BLOCK_NOTE_BLOCK_HAT,
+                        Sound.Source.AMBIENT,
+                        1f,
+                        1f,
+                    )
+                )
+            }
+
+            player.velocity = (player.position.direction() * velocity).asVec()
+
+            ticks -= 1
+
+            SchedulerManager.scheduleNextTick(::dash)
+        }
+
+        SchedulerManager.scheduleNextTick(::dash)
+
+        player.data.isUsingItem = false
     }
 }
