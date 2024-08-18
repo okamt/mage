@@ -2,7 +2,7 @@ package helio.game
 
 import helio.game.instance.DefaultInstance
 import helio.game.item.ItemSquirter
-import helio.module.integration.PlayerInstances
+import helio.module.integration.PlayerInstanceModule
 import helio.module.registerAllAnnotatedFeatures
 import helio.module.registerAllBuiltinModules
 import helio.util.listenWith
@@ -23,7 +23,7 @@ fun start() {
 
     MojangAuth.init()
 
-    PlayerInstances.defaultInstance = DefaultInstance
+    PlayerInstanceModule.defaultInstance = DefaultInstance
 
     registerAllBuiltinModules()
     registerAllAnnotatedFeatures(Game.javaClass.packageName)

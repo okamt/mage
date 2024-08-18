@@ -3,6 +3,7 @@ package helio.module.integration
 import helio.module.*
 import helio.util.exposed.pos
 import helio.util.listenWith
+import helio.util.orRun
 import net.bladehunt.kotstom.InstanceManager
 import net.minestom.server.event.player.AsyncPlayerConfigurationEvent
 import net.minestom.server.event.player.PlayerDisconnectEvent
@@ -13,29 +14,27 @@ import java.util.*
 /**
  * The player instances module.
  *
- * Handles storage of the player's position and instance.
+ * Handles storage of the player's position and instance using [PersistentData].
  */
 @BuiltinModule(BuiltinModuleType.INTEGRATION)
-object PlayerInstances : ServerModule("playerInstances") {
+object PlayerInstanceModule : ServerModule("playerInstanceModule") {
     lateinit var defaultInstance: InstanceDefinition<*>
 
     override fun onRegisterModule() {
         check(::defaultInstance.isInitialized) { "defaultInstance must be set." }
 
         eventNode.listenWith<AsyncPlayerConfigurationEvent> {
-            val playerInstanceData = PlayerInstance.getData(player.uuid)
-            if (playerInstanceData != null) {
-                val instance = InstanceManager.getInstance(playerInstanceData.instanceUUID) ?: return@listenWith
-                spawningInstance = instance
-                player.respawnPoint = playerInstanceData.pos.value
-            } else {
+            PlayerInstanceFeature.withData(player.uuid) {
+                spawningInstance = InstanceManager.getInstance(instanceUUID) ?: return@withData
+                player.respawnPoint = pos.value
+            } orRun {
                 spawningInstance = defaultInstance.getFirstInstanceOrNew()
                 player.respawnPoint = defaultInstance.defaultSpawnPoint
             }
         }
 
         eventNode.listenWith<PlayerDisconnectEvent> {
-            PlayerInstance.writeData(player.uuid) {
+            PlayerInstanceFeature.writeData(player.uuid) {
                 instanceUUID = player.instance.uniqueId
                 pos.value = player.position
             }
@@ -43,13 +42,13 @@ object PlayerInstances : ServerModule("playerInstances") {
     }
 }
 
-@RegisterFeature(Players::class)
-object PlayerInstance : PlayerDataDefinition<PlayerInstance.Data>(Data) {
+@RegisterFeature(PlayerFeatureRegistry::class)
+object PlayerInstanceFeature : FeatureDefinition(), DataStore<PlayerDataId, PlayerInstanceFeature.Data> by Data {
     const val ID = "playerInstance"
     override val id = Id(ID)
 
-    class Data(id: EntityID<UUID>) : PlayerData(id) {
-        companion object : Class<Data>(Table)
+    class Data(id: EntityID<UUID>) : PersistentData<UUID>(id) {
+        companion object : Store<UUID, Data>(Table)
 
         object Table : UUIDTable(ID) {
             val instanceUUID = uuid("instanceUUID")

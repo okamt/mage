@@ -1,10 +1,8 @@
 package helio.jam
 
+/*
 import helio.jam.JamGame.breakBlocksAroundPoint
-import helio.module.ItemData
-import helio.module.ItemDefinition
-import helio.module.Items
-import helio.module.RegisterFeature
+import helio.module.*
 import helio.util.listenWith
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.future.await
@@ -38,12 +36,12 @@ fun getRandomItem(): ItemStack =
         1.0 to DashItem,
     ).createItemStack()
 
-@RegisterFeature(Items::class)
-object AnvilItem : ItemDefinition<ItemData.Empty>(ItemData.Empty) {
+@RegisterFeature(ItemModule::class)
+object AnvilItem : ItemDefinitionWithoutData() {
     override val id = Id("Anvil")
     override val material: Material = Material.ANVIL
 
-    override suspend fun PlayerUseItemEvent.handle(data: ItemData.Empty) {
+    override suspend fun PlayerUseItemEvent.handle(data: NoItemData) {
         if (player.data.isUsingItem) {
             return
         }
@@ -104,12 +102,12 @@ object AnvilItem : ItemDefinition<ItemData.Empty>(ItemData.Empty) {
     }
 }
 
-@RegisterFeature(Items::class)
-object BallItem : ItemDefinition<ItemData.Empty>(ItemData.Empty) {
+@RegisterFeature(ItemModule::class)
+object BallItem : ItemDefinitionWithoutData() {
     override val id = Id("Big Ball")
     override val material: Material = Material.SNOWBALL
 
-    override suspend fun PlayerUseItemEvent.handle(data: ItemData.Empty) {
+    override suspend fun PlayerUseItemEvent.handle(data: NoItemData) {
         player.data.isUsingItem = true
         player.inventory.clear()
 
@@ -173,12 +171,12 @@ object BallItem : ItemDefinition<ItemData.Empty>(ItemData.Empty) {
     }
 }
 
-@RegisterFeature(Items::class)
-object TNTItem : ItemDefinition<ItemData.Empty>(ItemData.Empty) {
+@RegisterFeature(ItemModule::class)
+object TNTItem : ItemDefinitionWithoutData() {
     override val id = Id("Mega TNT")
     override val material: Material = Material.TNT
 
-    override suspend fun PlayerUseItemEvent.handle(data: ItemData.Empty) {
+    override suspend fun PlayerUseItemEvent.handle(data: NoItemData) {
         player.data.isUsingItem = true
         player.inventory.clear()
 
@@ -242,17 +240,17 @@ object TNTItem : ItemDefinition<ItemData.Empty>(ItemData.Empty) {
     }
 }
 
-@RegisterFeature(Items::class)
-object DashItem : ItemDefinition<ItemData.Empty>(ItemData.Empty) {
+@RegisterFeature(ItemRegistry::class)
+object DashItem : ItemDefinitionWithoutData() {
     override val id = Id("Dash")
     override val material: Material = Material.FEATHER
 
-    override suspend fun PlayerUseItemEvent.handle(data: ItemData.Empty) {
+    override suspend fun PlayerUseItemEvent.handle(data: NoItemData) {
         player.data.isUsingItem = true
         player.inventory.clear()
 
         var ticks = (20 * 1.0).roundToInt()
-        var velocity = if (player.data.pink) 125.0 else 75.0
+        val velocity = if (player.data.pink) 125.0 else 75.0
 
         fun dash() {
             if (ticks <= 0) {
@@ -280,3 +278,4 @@ object DashItem : ItemDefinition<ItemData.Empty>(ItemData.Empty) {
         player.data.isUsingItem = false
     }
 }
+*/

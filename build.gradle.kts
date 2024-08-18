@@ -1,6 +1,6 @@
 plugins {
-    kotlin("jvm") version "2.0.0"
-    kotlin("plugin.serialization") version "2.0.0"
+    kotlin("jvm") version "2.0.10"
+    kotlin("plugin.serialization") version "2.0.10"
 }
 
 group = "helio"
@@ -13,7 +13,8 @@ repositories {
 }
 
 val minestomVersion = "f53625f35b"
-val kotstomVersion = "0.3.0-alpha.1"
+val kotstomVersion = "0.4.0-alpha.0"
+val adventureApiVersion = "4.17.0"
 val schemVersion = "1.2.0"
 val kotlinScriptingJsr223Version = "2.0.0"
 val exposedVersion = "0.52.0"
@@ -27,6 +28,8 @@ dependencies {
 
     implementation("net.bladehunt:kotstom:$kotstomVersion")
     implementation("net.bladehunt:kotstom-adventure-serialization:$kotstomVersion")
+
+    implementation("net.kyori:adventure-text-minimessage:$adventureApiVersion")
 
     implementation("dev.hollowcube:schem:$schemVersion")
 

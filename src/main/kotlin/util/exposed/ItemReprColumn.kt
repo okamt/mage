@@ -1,8 +1,8 @@
 package helio.util.exposed
 
-import helio.game.instance.DefaultInstance.Data.Table.nullable
 import helio.module.FeatureDefinition
 import helio.module.ItemRepr
+import helio.module.integration.PlayerInstanceFeature.Data.Table.nullable
 import org.jetbrains.exposed.dao.Entity
 import org.jetbrains.exposed.sql.Table
 
@@ -18,8 +18,8 @@ class ItemReprColumn(table: Table, id: String) : CustomColumn<ItemReprColumn, It
         override var value: ItemRepr
             get() = ItemRepr(FeatureDefinition.Id(itemDefId), itemDataId)
             set(value) {
-                itemDefId = value.itemDefId.value
-                itemDataId = value.itemDataId
+                itemDefId = value.defId.value
+                itemDataId = value.dataId
             }
     }
 
@@ -48,8 +48,8 @@ class ItemReprColumn(table: Table, id: String) : CustomColumn<ItemReprColumn, It
                     }
                 }
                 set(value) {
-                    itemDefId = value?.itemDefId?.value
-                    itemDataId = value?.itemDataId
+                    itemDefId = value?.defId?.value
+                    itemDataId = value?.dataId
                 }
         }
 
