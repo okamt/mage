@@ -1,6 +1,6 @@
 package helio.jam
 
-import helio.module.*
+/*import helio.module.*
 import helio.util.listenWith
 import helio.util.only
 import kotlinx.coroutines.*
@@ -63,7 +63,7 @@ import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.TimeSource
 
-@RegisterFeature(Instances::class)
+@RegisterFeature(InstanceModule::class)
 object JamGame : InstanceDefinition<JamGame.Data>(Data) {
     const val ID = "gameInstance"
     override val id = Id(ID)
@@ -1042,7 +1042,7 @@ fun Point.forEachBlockAround(range: Double = 0.5, tnt: Boolean = false, block: X
 }
 
 class JamPlayerData {
-    companion object : VolatileData<UUID, JamPlayerData>(::JamPlayerData)
+    companion object : VolatileDataStore<UUID, JamPlayerData>(::JamPlayerData)
 
     var state = State.PLAYING
     var section = 0
@@ -1176,4 +1176,4 @@ fun Int.ordinal() = "$this" + when {
     (this % 10) == 2 -> "nd"
     (this % 10) == 3 -> "rd"
     else -> "th"
-}
+}*/
