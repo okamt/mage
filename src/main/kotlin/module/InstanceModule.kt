@@ -60,19 +60,24 @@ abstract class InstanceDefinition<DATA>(
     open val events by lazy { events {} }
 
     protected fun events(block: MultiEventHandler<InstanceDataId>.() -> Unit): MultiEventHandler<InstanceDataId> =
-        MultiEventHandler<InstanceDataId>(id.value)
+        MultiEventHandler<Instance>(id.value)
             .apply {
-                dataFor<InstanceEvent> { instance.uniqueId }
-                dataFor<PlayerEvent> { player.instance.uniqueId }
-                dataFor<EntityEvent> { entity.instance.uniqueId }
+                dataFor<InstanceEvent> { instance }
+                dataFor<PlayerEvent> { player.instance }
+                dataFor<EntityEvent> { entity.instance }
+
+                filterAll {
+                    it.definition == this@InstanceDefinition
+                }
             }
+            .transform<InstanceDataId> { it.uniqueId }
             .apply(block)
 
     override fun onRegisterDefinition() {
         ItemModule.eventNode.addChild(events.eventNode)
     }
 
-    open val onTick: (() -> TaskSchedule)? = null
+    open val onTick: ((InstanceContainer) -> TaskSchedule)? = null
     open fun onCreateInstanceContainer(instanceContainer: InstanceContainer): InstanceContainer = instanceContainer
 
     internal fun registerDimension() {
@@ -97,7 +102,7 @@ abstract class InstanceDefinition<DATA>(
         val onTick = onTick
         if (onTick != null) {
             instanceContainer.scheduleTask {
-                onTick.invoke()
+                onTick(it)
             }
         }
 

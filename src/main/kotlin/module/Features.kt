@@ -45,12 +45,19 @@ interface DataStore<KEY : Comparable<KEY>, DATA> {
     fun withData(key: KEY, block: DATA.() -> Unit): Boolean
     fun writeData(key: KEY, block: DATA.() -> Unit = {})
     fun makeData(block: DATA.() -> Unit = {}): KEY
+
+    interface Direct<KEY : Comparable<KEY>, DATA> : DataStore<KEY, DATA> {
+        fun newData(key: KEY, block: DATA.() -> Unit = {}): DATA
+        fun getData(key: KEY): DATA?
+        fun getDataOrNew(key: KEY, block: DATA.() -> Unit = {}): DATA =
+            getData(key) ?: newData(key, block)
+    }
 }
 
 /**
- * A [DataStore] that stores only one thing.
+ * A [DataStore.Direct] that stores only one thing.
  */
-abstract class SingleDataStore<KEY : Comparable<KEY>, DATA> : DataStore<KEY, DATA> {
+abstract class SingleDataStore<KEY : Comparable<KEY>, DATA> : DataStore.Direct<KEY, DATA> {
     companion object {
         fun <KEY : Comparable<KEY>, DATA> make(key: KEY, data: DATA): SingleDataStore<KEY, DATA> =
             object : SingleDataStore<KEY, DATA>() {
@@ -77,6 +84,12 @@ abstract class SingleDataStore<KEY : Comparable<KEY>, DATA> : DataStore<KEY, DAT
         singleData.block()
         return singleKey
     }
+
+    override fun newData(key: KEY, block: DATA.() -> Unit): DATA =
+        singleData
+
+    override fun getData(key: KEY): DATA? =
+        singleData
 }
 
 class DummyDataStore<KEY : Comparable<KEY>>(override val singleKey: KEY) : SingleDataStore<KEY, Unit>() {
@@ -84,14 +97,16 @@ class DummyDataStore<KEY : Comparable<KEY>>(override val singleKey: KEY) : Singl
 }
 
 /**
- * A [DataStore] that keeps data in memory only (non-persistent).
+ * A [DataStore] that keeps data in memory only (non-persistent). Has methods for accessing [DATA] directly.
+ *
+ * If [keyMaker] is not supplied, the [makeData] method will always fail.
  *
  * Recommended to be used as the companion object of [DATA] (like [PersistentData.Store]).
  */
 abstract class VolatileDataStore<KEY : Comparable<KEY>, DATA>(
     private val dataMaker: () -> DATA,
-    private val keyMaker: () -> KEY,
-) : DataStore<KEY, DATA> {
+    private val keyMaker: (() -> KEY)? = null,
+) : DataStore.Direct<KEY, DATA> {
     private val volatileDataMap = mutableMapOf<KEY, DATA>()
 
     override fun hasData(key: KEY): Boolean = key in volatileDataMap
@@ -113,10 +128,20 @@ abstract class VolatileDataStore<KEY : Comparable<KEY>, DATA>(
     }
 
     override fun makeData(block: DATA.() -> Unit): KEY {
-        val key = keyMaker()
+        val key = (keyMaker ?: error("Can't make data on this VolatileDataStore."))()
         writeData(key, block)
         return key
     }
+
+    override fun newData(key: KEY, block: DATA.() -> Unit): DATA {
+        val data = dataMaker()
+        data.block()
+        volatileDataMap[key] = data
+        return data
+    }
+
+    override fun getData(key: KEY): DATA? =
+        volatileDataMap[key]
 }
 
 /**
