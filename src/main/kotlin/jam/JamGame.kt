@@ -1,6 +1,6 @@
 package helio.jam
 
-/*import helio.module.*
+import helio.module.*
 import helio.util.listenWith
 import helio.util.only
 import kotlinx.coroutines.*
@@ -37,6 +37,7 @@ import net.minestom.server.event.item.ItemDropEvent
 import net.minestom.server.event.player.AsyncPlayerConfigurationEvent
 import net.minestom.server.event.player.PlayerDisconnectEvent
 import net.minestom.server.event.player.PlayerSpawnEvent
+import net.minestom.server.event.player.PlayerSwapItemEvent
 import net.minestom.server.instance.Instance
 import net.minestom.server.instance.InstanceContainer
 import net.minestom.server.instance.WorldBorder
@@ -50,11 +51,10 @@ import net.minestom.server.registry.DynamicRegistry
 import net.minestom.server.scoreboard.Sidebar
 import net.minestom.server.sound.SoundEvent
 import net.minestom.server.tag.Tag
+import net.minestom.server.timer.TaskSchedule
 import net.minestom.server.world.DimensionType
 import net.minestom.server.world.biome.Biome
 import net.minestom.server.world.biome.BiomeEffects
-import org.jetbrains.exposed.dao.id.EntityID
-import org.jetbrains.exposed.dao.id.UUIDTable
 import org.jetbrains.exposed.sql.Database
 import java.util.*
 import kotlin.math.ceil
@@ -63,8 +63,8 @@ import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.TimeSource
 
-@RegisterFeature(InstanceModule::class)
-object JamGame : InstanceDefinition<JamGame.Data>(Data) {
+@RegisterFeature(InstanceRegistry::class)
+object JamGame : InstanceDefinitionWithoutData() {
     const val ID = "gameInstance"
     override val id = Id(ID)
 
@@ -521,12 +521,6 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
         }
     }
 
-    class Data(id: EntityID<UUID>) : InstanceData(id) {
-        companion object : Class<Data>(Table)
-
-        object Table : UUIDTable(ID)
-    }
-
     override fun onCreateInstanceContainer(instanceContainer: InstanceContainer): InstanceContainer {
         //instanceContainer.worldBorder = WorldBorder((RADIUS * 2).toDouble(), 0.0, 0.0, 0, 0)
         instanceContainer.timeRate = 0
@@ -581,7 +575,7 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
     const val FLY_SOUND_AIRBORNE_TICKS_THRESHOLD = 20 * 2
     const val FLY_SOUND_DURATION_TICKS = 20 * 10
 
-    override suspend fun onTick() {
+    override val onTick = { instance: InstanceContainer ->
         val elapsed = started.elapsedNow()
         val actionBar = elapsed.neat.asComponent()
         var heights = mutableListOf<Pair<Player, Float>>()
@@ -622,7 +616,7 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
                 if (player.position.y <= (END_Y + 16)) {
                     if (!player.data.moving) {
                         player.data.moving = true
-                        coroutineScope {
+                        CoroutineScope(MinestomDispatcher).launch {
                             async {
                                 moveToNextSection(player)
                             }
@@ -744,38 +738,44 @@ object JamGame : InstanceDefinition<JamGame.Data>(Data) {
         }
 
         tick += 1
+
+        TaskSchedule.nextTick()
     }
 
     var starting = Mutex()
 
-    override suspend fun PlayerSpawnEvent.handle(data: Data) = coroutineScope {
-        if (!player.data.sidebar.isViewer(player)) {
-            player.data.sidebar.addViewer(player)
-        }
-
-        player.sendPacket(
-            WorldBorder((RADIUS * 2).toDouble(), 0.0, 0.0, 0, 0).createInitializePacket(RADIUS * 2.0, 100)
-        )
-
-        when (state) {
-            State.WAITING -> {
-                player.gameMode = GameMode.ADVENTURE
-                player.data.state = JamPlayerData.State.PLAYING
-
-                instance.sendMessage("<yellow>${player.username}</yellow> has joined the game.".asMini())
-
-                if (ConnectionManager.onlinePlayerCount >= PLAYERS_TO_START && starting.tryLock()) {
-                    launch {
-                        countdown()
-                        //start()
-                        starting.unlock()
-                    }
-                }
+    override val events = events {
+        handleAsync<PlayerSpawnEvent> {
+            if (!player.data.sidebar.isViewer(player)) {
+                player.data.sidebar.addViewer(player)
             }
 
-            State.ONGOING -> {
-                player.gameMode = GameMode.SPECTATOR
-                player.data.state = JamPlayerData.State.SPECTATING
+            player.sendPacket(
+                WorldBorder((RADIUS * 2).toDouble(), 0.0, 0.0, 0, 0).createInitializePacket(RADIUS * 2.0, 100)
+            )
+
+            when (state) {
+                State.WAITING -> {
+                    player.gameMode = GameMode.ADVENTURE
+                    player.data.state = JamPlayerData.State.PLAYING
+
+                    instance.sendMessage("<yellow>${player.username}</yellow> has joined the game.".asMini())
+
+                    if (ConnectionManager.onlinePlayerCount >= PLAYERS_TO_START && starting.tryLock()) {
+                        coroutineScope {
+                            launch {
+                                countdown()
+                                //start()
+                                starting.unlock()
+                            }
+                        }
+                    }
+                }
+
+                State.ONGOING -> {
+                    player.gameMode = GameMode.SPECTATOR
+                    player.data.state = JamPlayerData.State.SPECTATING
+                }
             }
         }
     }
@@ -1063,7 +1063,7 @@ class JamPlayerData {
 }
 
 val Player.data
-    get() = JamPlayerData.getDataOrNew(uuid) {}
+    get() = JamPlayerData.getDataOrNew(uuid)
 
 data object Config {
     val address: String = "0.0.0.0"
@@ -1095,6 +1095,8 @@ fun start() {
 
     GlobalEventHandler.listenWith<InventoryPreClickEvent> { isCancelled = true }
 
+    GlobalEventHandler.listenWith<PlayerSwapItemEvent> { isCancelled = true }
+
     JamGame.createInstanceContainer()
 
     System.setProperty("minestom.chunk-view-distance", 2.toString())
@@ -1106,12 +1108,16 @@ fun start() {
             val item = ArgumentString("item")
 
             defaultExecutorAsync {
+                if (!player.op) return@defaultExecutorAsync
+
                 JamGame.giveItem(player)
             }
 
             buildSyntax(item) {
                 onlyPlayers()
                 executor {
+                    if (!player.op) return@executor
+
                     player.inventory.addItemStack(
                         when (item().lowercase()) {
                             "anvil" -> AnvilItem
@@ -1131,6 +1137,8 @@ fun start() {
             name = "debug_next"
 
             defaultExecutorAsync {
+                if (!player.op) return@defaultExecutorAsync
+
                 JamGame.moveToNextSection(player)
             }
         },
@@ -1138,6 +1146,8 @@ fun start() {
             name = "debug_reset"
 
             defaultExecutorAsync {
+                if (!player.op) return@defaultExecutorAsync
+
                 JamGame.reset()
             }
         },
@@ -1176,4 +1186,7 @@ fun Int.ordinal() = "$this" + when {
     (this % 10) == 2 -> "nd"
     (this % 10) == 3 -> "rd"
     else -> "th"
-}*/
+}
+
+val Player.op
+    get() = username == "deagahelio" || username == "notmattw"

@@ -44,12 +44,17 @@ abstract class ItemDefinition<DATA>(
     open val events by lazy { events {} }
 
     protected fun events(block: MultiEventHandler<ItemDataId>.() -> Unit): MultiEventHandler<ItemDataId> =
-        MultiEventHandler<ItemDataId>(id.value)
+        MultiEventHandler<ItemStack>(id.value)
             .apply {
-                dataFor<ItemEvent> { itemStack.dataId }
-                dataFor<PlayerBlockPlaceEvent> { player.getItemInHand(hand).dataId }
-                dataFor<PlayerItemAnimationEvent> { player.getItemInHand(hand).dataId }
+                dataFor<ItemEvent> { itemStack }
+                dataFor<PlayerBlockPlaceEvent> { player.getItemInHand(hand) }
+                dataFor<PlayerItemAnimationEvent> { player.getItemInHand(hand) }
+
+                filterAll { item: ItemStack ->
+                    item.definition == this@ItemDefinition
+                }
             }
+            .transform<ItemDataId> { it.dataId }
             .apply(block)
             .apply {
                 default<PlayerBlockPlaceEvent> {
