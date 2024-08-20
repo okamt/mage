@@ -1088,6 +1088,16 @@ fun start() {
     }
 
     GlobalEventHandler.listenWith<PlayerDisconnectEvent> {
+        if (ConnectionManager.onlinePlayers.filterNot { it == player || it.data.state == JamPlayerData.State.SPECTATING }
+                .isEmpty() &&
+            JamGame.state == JamGame.State.ONGOING
+        ) {
+            CoroutineScope(MinestomDispatcher).launch {
+                JamGame.reset()
+            }
+            return@listenWith
+        }
+
         JamGame.instance.sendMessage("<yellow>${player.username}</yellow> has left the game.".asMini())
     }
 
