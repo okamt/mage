@@ -38,6 +38,7 @@ import net.minestom.server.event.player.AsyncPlayerConfigurationEvent
 import net.minestom.server.event.player.PlayerDisconnectEvent
 import net.minestom.server.event.player.PlayerSpawnEvent
 import net.minestom.server.event.player.PlayerSwapItemEvent
+import net.minestom.server.extras.bungee.BungeeCordProxy
 import net.minestom.server.instance.Instance
 import net.minestom.server.instance.InstanceContainer
 import net.minestom.server.instance.WorldBorder
@@ -1128,6 +1129,8 @@ fun start() {
     JamGame.createInstanceContainer()
 
     System.setProperty("minestom.chunk-view-distance", 2.toString())
+
+    BungeeCordProxy.enable()
 
     listOf(
         kommand {
