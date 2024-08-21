@@ -862,7 +862,7 @@ object JamGame : InstanceDefinitionWithoutData() {
             fun checkCrystal() {
                 for (player in instance.players) {
                     if (crystal.boundingBox.intersectEntity(crystal.position, player)) {
-                        if (player.data.rollingItem) {
+                        if (player.data.rollingItem || player.data.state == JamPlayerData.State.SPECTATING) {
                             continue
                         }
 
@@ -975,6 +975,7 @@ object JamGame : InstanceDefinitionWithoutData() {
             zone.unapplyEffect(player)
             player.data.sidebar.removeViewer(player)
             JamPlayerData.writeData(player.uuid) {}
+            player.inventory.clear()
         }
         state = State.WAITING
         val oldInstance = instance
