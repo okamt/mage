@@ -89,7 +89,7 @@ object JamGame : InstanceDefinitionWithoutData() {
         DimensionType.builder().ambientLight(1f).minY(DIMENSION_MIN_Y).height(DIMENSION_HEIGHT).fixedTime(6000)
             .logicalHeight(DIMENSION_HEIGHT).build()
 
-    override val defaultSpawnPoint = Pos(0.0, (START_Y + START_BARRIER_Y_OFFSET + 1).toDouble(), 0.0)
+    override val defaultSpawnPoint = Pos(0.0, (START_Y + START_BARRIER_Y_OFFSET + 3).toDouble(), 0.0)
     //override val defaultSpawnPoint = Pos(0.0, 50.0, 0.0)
 
     enum class State {
