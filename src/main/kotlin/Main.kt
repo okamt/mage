@@ -1,6 +1,6 @@
 package helio
 
-import helio.jam.start
+import helio.game.start
 
 fun main() {
     start()
