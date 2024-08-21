@@ -59,6 +59,7 @@ import org.jetbrains.exposed.sql.Database
 import java.util.*
 import kotlin.math.ceil
 import kotlin.math.floor
+import kotlin.math.max
 import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.TimeSource
@@ -574,6 +575,7 @@ object JamGame : InstanceDefinitionWithoutData() {
     val flySound = Sound.sound(SoundEvent.ITEM_ELYTRA_FLYING, Sound.Source.AMBIENT, 1f, 0.8f)
     const val FLY_SOUND_AIRBORNE_TICKS_THRESHOLD = 20 * 2
     const val FLY_SOUND_DURATION_TICKS = 20 * 10
+    var lastLeaderboard: List<Pair<Player, Float>> = listOf()
 
     override val onTick = { instance: InstanceContainer ->
         val elapsed = started.elapsedNow()
@@ -657,82 +659,93 @@ object JamGame : InstanceDefinitionWithoutData() {
             }
         }
 
-        val sortedHeights = heights.sortedWith(compareBy<Pair<Player, Float>> { it.second }.reversed())
-        val gotIt = mutableSetOf<Player>()
-        for (player in instance.players) {
-            val sidebar = player.data.sidebar
-            if (!sidebar.isViewer(player)) {
-                sidebar.addViewer(player)
+        val lastLeaderboard = this.lastLeaderboard
+        val leaderboard =
+            heights.sortedWith(
+                compareBy<Pair<Player, Float>>(
+                    { it.second },
+                    { it.first.data.time }).reversed()
+            )
+        this.lastLeaderboard = leaderboard
+
+        fun updateSidebar(player: Player) {
+            val sidebar = Sidebar(sidebarTitle)
+
+            var index = leaderboard.indexOfFirst { it.first == player }
+            if (index == -1) {
+                index = leaderboard.size - 1
             }
 
-            //fun heightToLine(height: Float): Int = (1_000_000.0 * height).roundToInt()
+            var from = index - 7
+            var to = index + 8
 
-            if (sidebar.lines.isEmpty() || instance.players.any { player1 -> player1.data.state == JamPlayerData.State.PLAYING && player1.uuid.toString() !in sidebar.lines.map { it.id } }) {
-                for (line in sidebar.lines) {
-                    sidebar.removeLine(line.id)
-                }
-                var i = sortedHeights.size
-                for ((player2, height) in sortedHeights) {
-                    sidebar.createLine(
-                        Sidebar.ScoreboardLine(
-                            player2.uuid.toString(),
-                            if (player == player2) "<yellow>${player2.username}".asMini() else "<white>${player2.username}".asMini(),
-                            i
-                        )
+            if (from < 0) {
+                to += -from
+                from = 0
+            }
+
+            if (to >= leaderboard.size) {
+                from = max(leaderboard.size - 15, 0)
+                to = leaderboard.size
+            }
+
+            for ((index, pair) in leaderboard.withIndex().asSequence().toList().subList(from, to)) {
+                val (linePlayer, _) = pair
+                val pos = leaderboard.size - index
+                sidebar.createLine(
+                    Sidebar.ScoreboardLine(
+                        linePlayer.uuid.toString(),
+                        ((if (linePlayer == player) "<yellow>" else "<white>") + linePlayer.username).asMini(),
+                        pos
                     )
-                    i -= 1
+                )
+            }
+
+            sidebar.addViewer(player)
+        }
+
+        if (leaderboard.isNotEmpty()) {
+            for (player in instance.players) {
+                val sidebar = player.data.sidebar
+                if (!sidebar.isViewer(player)) {
+                    sidebar.addViewer(player)
                 }
-            } else {
-                var i = sortedHeights.size
-                for (line in sidebar.lines) {
-                    val player1 = instance.players.find { line.id == it.uuid.toString() }
-                    if (player1 == null || player1.data.state == JamPlayerData.State.SPECTATING || player1.gameMode == GameMode.SPECTATOR) {
-                        sidebar.removeLine(line.id)
-                    }
-                }
-                var lastPlayer: Player? = null
-                for ((player2, height) in sortedHeights) {
-                    val line = sidebar.getLine(player2.uuid.toString())!!
-                    val player = instance.players.find { it.uuid.toString() == line.id }
-                    if (player == null) {
-                        sidebar.lines.remove(line)
-                        continue
-                    } else {
-                        val height = heights.find { it.first == player } ?: continue
-                        val oldScore = line.line
-                        sidebar.updateLineScore(line.id, i)
-                        if (player2 == player && !player.data.moving) {
-                            if (oldScore > i && lastPlayer != null && !lastPlayer.data.moving && player !in gotIt) {
-                                player.sendMessage("<green>You passed ${lastPlayer.username}! (now in ${i.ordinal()})".asMini())
-                                player.playSound(
+
+                updateSidebar(player)
+
+                val index = leaderboard.indexOfFirst { it.first == player }
+                if (index != -1) {
+                    val pos = leaderboard.size - index
+                    val previousIndex = lastLeaderboard.indexOfFirst { it.first == player }
+                    if (previousIndex != -1 && index > previousIndex) {
+                        val passed = leaderboard.withIndex().asSequence().toList().subList(previousIndex, index)
+                        if (passed.isNotEmpty()) {
+                            player.playSound(
+                                Sound.sound(
+                                    SoundEvent.BLOCK_NOTE_BLOCK_BELL,
+                                    Sound.Source.AMBIENT,
+                                    1f,
+                                    1f
+                                )
+                            )
+                            for ((passedIndex, passedPair) in passed) {
+                                val (passedPlayer, _) = passedPair
+
+                                player.sendMessage("<green>You passed ${passedPlayer.username}! (now in ${pos.ordinal()})".asMini())
+
+                                val passedPlayerPos = leaderboard.size - passedIndex
+                                passedPlayer.sendMessage("<red>${player.username} passed you! (now in ${passedPlayerPos.ordinal()})".asMini())
+                                passedPlayer.playSound(
                                     Sound.sound(
                                         SoundEvent.BLOCK_NOTE_BLOCK_BELL,
                                         Sound.Source.AMBIENT,
                                         1f,
-                                        1f
+                                        0.5f
                                     )
                                 )
-                                gotIt.add(player)
-                            } else if (oldScore < i) {
-                                val nextPlayer =
-                                    sortedHeights.getOrNull(sortedHeights.indexOfFirst { it.first == player2 } + 1)?.first
-                                if (nextPlayer != null && !nextPlayer.data.moving && player !in gotIt) {
-                                    player.sendMessage("<red>${nextPlayer.username} passed you! (now in ${i.ordinal()})".asMini())
-                                    player.playSound(
-                                        Sound.sound(
-                                            SoundEvent.BLOCK_NOTE_BLOCK_BELL,
-                                            Sound.Source.AMBIENT,
-                                            1f,
-                                            0.5f
-                                        )
-                                    )
-                                    gotIt.add(player)
-                                }
                             }
                         }
                     }
-                    i -= 1
-                    lastPlayer = player2
                 }
             }
         }
@@ -1041,6 +1054,8 @@ fun Point.forEachBlockAround(range: Double = 0.5, tnt: Boolean = false, block: X
     }
 }
 
+val sidebarTitle = "<rainbow><bold>FREE FALL".asMini()
+
 class JamPlayerData {
     companion object : VolatileDataStore<UUID, JamPlayerData>(::JamPlayerData)
 
@@ -1054,7 +1069,7 @@ class JamPlayerData {
     var pink = false
     var yellow = false
     var time: Duration? = null
-    var sidebar = Sidebar("<rainbow><bold>FREE FALL".asMini())
+    var sidebar = Sidebar(sidebarTitle)
 
     enum class State {
         PLAYING,
