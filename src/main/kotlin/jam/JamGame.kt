@@ -290,8 +290,10 @@ object JamGame : InstanceDefinitionWithoutData() {
             }".asMini()
         )
         delay(1000 * 5)
+        if (state != State.ONGOING) return
         instance.sendMessage("Restarting in 10 seconds!".asComponent())
         delay(1000 * 10)
+        if (state != State.ONGOING) return
         reset()
     }
 
