@@ -1,5 +1,5 @@
 package helio.jam
-
+/*
 import helio.jam.JamGame.breakBlocksAroundPoint
 import helio.module.*
 import helio.util.listenWith
@@ -279,4 +279,4 @@ object DashItem : ItemDefinitionWithoutData() {
             player.data.isUsingItem = false
         }
     }
-}
+}*/
