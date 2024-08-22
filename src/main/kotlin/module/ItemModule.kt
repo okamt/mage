@@ -3,6 +3,8 @@ package helio.module
 import net.bladehunt.kotstom.dsl.item.item
 import net.bladehunt.kotstom.dsl.item.itemName
 import net.kyori.adventure.text.Component
+import net.minestom.server.event.Event
+import net.minestom.server.event.EventNode
 import net.minestom.server.event.player.PlayerBlockPlaceEvent
 import net.minestom.server.event.player.PlayerItemAnimationEvent
 import net.minestom.server.event.trait.ItemEvent
@@ -38,32 +40,32 @@ abstract class ItemDefinitionWithoutData : ItemDefinition<Unit>(DummyDataStore(0
 
 abstract class ItemDefinition<DATA>(
     dataStore: DataStore<ItemDataId, DATA>,
-) : FeatureDefinition(), DataStore<ItemDataId, DATA> by dataStore {
+) : FeatureDefinition(), DataStore<ItemDataId, DATA> by dataStore, MultiEventHandler<ItemDataId> {
+    companion object {
+        inline fun <reified EVENT : Event> EVENT.getItemStackFromEvent(): ItemStack? = when (this) {
+            is ItemEvent -> itemStack
+            is PlayerBlockPlaceEvent -> player.getItemInHand(hand)
+            is PlayerItemAnimationEvent -> player.getItemInHand(hand)
+            else -> null
+        }
+    }
+
     abstract val material: Material
 
-    open val events by lazy { events {} }
+    fun ItemEvent.getData() = getItemStackFromEvent()!!.dataId
+    fun PlayerBlockPlaceEvent.getData() = getItemStackFromEvent()!!.dataId
+    fun PlayerItemAnimationEvent.getData() = getItemStackFromEvent()!!.dataId
 
-    protected fun events(block: MultiEventHandler<ItemDataId>.() -> Unit): MultiEventHandler<ItemDataId> =
-        MultiEventHandler<ItemStack>(id.value)
-            .apply {
-                dataFor<ItemEvent> { itemStack }
-                dataFor<PlayerBlockPlaceEvent> { player.getItemInHand(hand) }
-                dataFor<PlayerItemAnimationEvent> { player.getItemInHand(hand) }
+    fun Event.filter() = getItemStackFromEvent()?.definition == this@ItemDefinition
 
-                filterAll { item: ItemStack ->
-                    item.definition == this@ItemDefinition
-                }
-            }
-            .transform<ItemDataId> { it.dataId }
-            .apply(block)
-            .apply {
-                default<PlayerBlockPlaceEvent> {
-                    isCancelled = true
-                }
-            }
+    fun PlayerBlockPlaceEvent.handle() {
+        isCancelled = true
+    }
 
     override fun onRegisterDefinition() {
-        ItemModule.eventNode.addChild(events.eventNode)
+        val eventNode = EventNode.all(id.value)
+        registerAllEventHandlers(eventNode)
+        ItemModule.eventNode.addChild(eventNode)
     }
 
     open fun ItemStack.Builder.onCreateItemStack(withDataId: ItemDataId) {}

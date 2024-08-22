@@ -4,6 +4,8 @@ import net.bladehunt.kotstom.DimensionTypeRegistry
 import net.bladehunt.kotstom.InstanceManager
 import net.bladehunt.kotstom.dsl.scheduleTask
 import net.minestom.server.coordinate.Pos
+import net.minestom.server.event.Event
+import net.minestom.server.event.EventNode
 import net.minestom.server.event.trait.EntityEvent
 import net.minestom.server.event.trait.InstanceEvent
 import net.minestom.server.event.trait.PlayerEvent
@@ -47,7 +49,16 @@ abstract class InstanceDefinitionWithoutData : InstanceDefinition<Unit>(DummyDat
 
 abstract class InstanceDefinition<DATA>(
     dataStore: DataStore<InstanceDataId, DATA>,
-) : FeatureDefinition(), DataStore<InstanceDataId, DATA> by dataStore {
+) : FeatureDefinition(), DataStore<InstanceDataId, DATA> by dataStore, MultiEventHandler<DATA> {
+    companion object {
+        inline fun <reified EVENT : Event> EVENT.getInstanceFromEvent(): Instance? = when (this) {
+            is InstanceEvent -> instance
+            is PlayerEvent -> player.instance
+            is EntityEvent -> entity.instance
+            else -> null
+        }
+    }
+
     open val chunkLoader: IChunkLoader? = null
     open val dimensionType: DimensionType? = null
     open var dimensionTypeKey: DynamicRegistry.Key<DimensionType> = DimensionType.OVERWORLD
@@ -57,24 +68,16 @@ abstract class InstanceDefinition<DATA>(
     val instances
         get() = listOf(instanceContainers)
 
-    open val events by lazy { events {} }
+    fun InstanceEvent.getData() = getInstanceFromEvent()!!.uniqueId
+    fun PlayerEvent.getData() = getInstanceFromEvent()!!.uniqueId
+    fun EntityEvent.getData() = getInstanceFromEvent()!!.uniqueId
 
-    protected fun events(block: MultiEventHandler<InstanceDataId>.() -> Unit): MultiEventHandler<InstanceDataId> =
-        MultiEventHandler<Instance>(id.value)
-            .apply {
-                dataFor<InstanceEvent> { instance }
-                dataFor<PlayerEvent> { player.instance }
-                dataFor<EntityEvent> { entity.instance }
-
-                filterAll {
-                    it.definition == this@InstanceDefinition
-                }
-            }
-            .transform<InstanceDataId> { it.uniqueId }
-            .apply(block)
+    fun Event.filter() = getInstanceFromEvent()?.definition == this@InstanceDefinition
 
     override fun onRegisterDefinition() {
-        ItemModule.eventNode.addChild(events.eventNode)
+        val eventNode = EventNode.all(id.value)
+        registerAllEventHandlers(eventNode)
+        InstanceModule.eventNode.addChild(eventNode)
     }
 
     open val onTick: ((InstanceContainer) -> TaskSchedule)? = null

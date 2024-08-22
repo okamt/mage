@@ -6,126 +6,136 @@ import net.bladehunt.kotstom.coroutines.MinestomDispatcher
 import net.minestom.server.event.Event
 import net.minestom.server.event.EventNode
 import kotlin.reflect.KClass
-import kotlin.reflect.full.isSubclassOf
+import kotlin.reflect.KFunction
+import kotlin.reflect.KType
+import kotlin.reflect.full.allSupertypes
+import kotlin.reflect.full.callSuspend
+import kotlin.reflect.full.extensionReceiverParameter
+import kotlin.reflect.full.functions
+import kotlin.reflect.full.isSubtypeOf
+import kotlin.reflect.full.starProjectedType
 
 /**
- * A wrapper for [EventNode] that can fetch [DATA] for the handler based on [Event] type, among other things.
+ * Interface for easily defining event handlers that may take [DATA]. Uses reflection to find relevant functions.
+ *
+ * When called, [MultiEventHandler.registerAllEventHandlers] will look for these functions in your class, where `E` is [Event] or a subtype:
+ *
+ * - `E.handle()`
+ * - `E.handle(`[DATA]`)`
+ * - `E.getData(): `[DATA]
+ * - `E.filter(): `[Boolean]
+ *
+ * Also supports `suspend` event handlers through [MinestomDispatcher].
+ *
+ * Additionally, if [DataStore] is implemented, and `DataStore.KEY == `[DATA], event handlers may have a `DataStore.DATA` parameter.
  */
-class MultiEventHandler<DATA>(val name: String) {
-    val eventNode = EventNode.all(name)
-    val dataGetters = mutableListOf<Pair<KClass<out Event>, (Event) -> DATA>>()
-    val filters = mutableListOf<Pair<KClass<out Event>, Event.(DATA) -> Boolean>>()
+interface MultiEventHandler<DATA>
 
-    /**
-     * Registers a [DATA] getter for the [EVENT] type (including subtypes).
-     * If multiple are registered the last one will take precedence.
-     */
-    inline fun <reified EVENT : Event> dataFor(noinline block: EVENT.() -> DATA) {
-        dataGetters.add(EVENT::class to { block.invoke(it as EVENT) })
-    }
+inline fun <reified T> T.getTypeArgument(nth: Int): KClass<*> =
+    (if (this is KType) this else this::class.allSupertypes.first { it.classifier == T::class })
+        .arguments[nth].type!!.classifier as KClass<*>
 
-    /**
-     * Registers an event handler for [EVENT] with [DATA] as argument, if none already exist.
-     *
-     * @see handle
-     */
-    inline fun <reified EVENT : Event> default(crossinline listener: EVENT.(data: DATA) -> Unit) {
-        if (!eventNode.hasListener(EVENT::class.java)) {
-            handle(listener)
+fun MultiEventHandler<*>.getEventHandlers(eventClass: KClass<out Event>): List<KFunction<*>> {
+    val dataStore = this::class.allSupertypes.firstOrNull { it.classifier == DataStore::class }
+    val allowsData = (dataStore != null) && (dataStore.getTypeArgument(0) == getTypeArgument(0))
+
+    return this::class.functions.filter {
+        it.extensionReceiverParameter?.type?.isSubtypeOf(eventClass.starProjectedType) == true && it.name == "handle"
+    }.map {
+        check(
+            it.parameters.size == 2 ||
+                    (it.parameters.size == 3 && it.parameters[2].type.classifier == getTypeArgument(0)) ||
+                    (allowsData && it.parameters.size == 3 && it.parameters[2].type.classifier == dataStore.getTypeArgument(
+                        1
+                    ))
+        ) {
+            if (allowsData)
+                "Event handler $it must have no parameters, one parameter of type ${getTypeArgument(0).qualifiedName} " +
+                        "or one parameter of type ${dataStore.getTypeArgument(1).qualifiedName}."
+            else
+                "Event handler $it must have no parameters or one parameter of type ${getTypeArgument(0).qualifiedName}."
         }
-    }
 
-    /**
-     * Registers an async event handler for [EVENT] with [DATA] as argument.
-     *
-     * @see handle
-     */
-    inline fun <reified EVENT : Event> handleAsync(crossinline listener: suspend EVENT.(data: DATA) -> Unit) {
-        handle<EVENT> {
-            CoroutineScope(MinestomDispatcher).launch {
-                listener(it)
-            }
-        }
+        it
     }
+}
 
-    /**
-     * Registers a filter predicate for [EVENT] handlers. Only [EVENT]s that satisfy all registered predicates for
-     * [EVENT] and its superclasses will have their handlers executed. Handlers registered before a filter will not
-     * be affected by it.
-     *
-     * @see filterAll
-     */
-    inline fun <reified EVENT : Event> filter(noinline block: EVENT.(data: DATA) -> Boolean) {
+internal fun <DATA> MultiEventHandler<DATA>.getEventDataGetters(eventClass: KClass<out Event>): List<KFunction<DATA>> =
+    this::class.functions.filter {
+        it.extensionReceiverParameter?.type?.let(eventClass.starProjectedType::isSubtypeOf) == true &&
+                it.name == "getData" &&
+                it.returnType.classifier == getTypeArgument(0)
+    }.map {
+        check(it.parameters.size == 2) { "Event data getter $it must have no parameters." }
+
         @Suppress("UNCHECKED_CAST")
-        filters.add(EVENT::class to (block as Event.(DATA) -> Boolean))
+        it as KFunction<DATA>
     }
 
-    /**
-     * Registers a filter predicate for all event handlers.
-     *
-     * @see filter
-     */
-    fun filterAll(block: Event.(data: DATA) -> Boolean) {
-        filters.add(Event::class to block)
+internal fun MultiEventHandler<*>.getEventFilters(eventClass: KClass<out Event>): List<KFunction<Boolean>> =
+    this::class.functions.filter {
+        it.extensionReceiverParameter?.type?.let(eventClass.starProjectedType::isSubtypeOf) == true &&
+                it.name == "filter" &&
+                it.returnType.classifier == Boolean::class
+    }.map {
+        check(it.parameters.size == 2) { "Event filter $it must have no parameters." }
+
+        @Suppress("UNCHECKED_CAST")
+        it as KFunction<Boolean>
     }
 
-    /**
-     * Transforms this [MultiEventHandler] from [DATA] to [NEW_DATA]. Will transform all [dataGetters] using [block].
-     * Existing [filters] will work the same, using the old [dataGetters]. The current [eventNode] will be set as
-     * child of the new [eventNode].
-     *
-     * @throws [IllegalStateException] if no data getter exists for one of the current filters
-     */
-    fun <NEW_DATA> transform(block: (data: DATA) -> NEW_DATA): MultiEventHandler<NEW_DATA> {
-        val new = MultiEventHandler<NEW_DATA>(name)
-        new.eventNode.addChild(eventNode)
-        new.dataGetters.addAll(dataGetters.map {
-            it.first to { event: Event -> block(it.second(event)) }
-        })
-        new.filters.addAll(filters.map { pair ->
-            pair.first to {
-                val data =
-                    checkNotNull(this@MultiEventHandler.getDataGetter(this::class)) { "No data getter for event ${this::class}" }
-                        .invoke(this)
-                pair.second.invoke(this, data)
-            }
-        })
-        return new
-    }
+/**
+ * @see MultiEventHandler
+ */
+fun <DATA> MultiEventHandler<DATA>.registerAllEventHandlers(eventNode: EventNode<Event>) {
+    getEventHandlers(Event::class).forEach { eventHandler ->
+        @Suppress("UNCHECKED_CAST") val eventClass =
+            eventHandler.extensionReceiverParameter!!.type.classifier as KClass<out Event>
 
-    /**
-     * Gets the data getter for [EVENT].
-     * If multiple are registered the last one will take precedence.
-     */
-    inline fun <reified EVENT : Event> getDataGetter(): ((Event) -> DATA)? =
-        getDataGetter(EVENT::class)
+        assert(eventHandler.parameters[0].type.classifier == this::class)
+        assert(eventHandler.parameters[1].type.classifier == eventClass)
 
-    /**
-     * Gets the data getter for [eventClass].
-     * If multiple are registered the last one will take precedence.
-     */
-    fun getDataGetter(eventClass: KClass<out Event>): ((Event) -> DATA)? =
-        dataGetters.reversed().firstOrNull { (clazz, _) -> eventClass.isSubclassOf(clazz) }?.second
+        val dataGetter = requireNotNull(
+            getEventDataGetters(eventClass).reversed().firstOrNull()
+        ) { "No data getter for event ${eventClass.qualifiedName}." }
 
-    /**
-     * Registers an event handler for [EVENT] with [DATA] as argument.
-     *
-     * @throws IllegalArgumentException if no data getter exists for [EVENT]
-     */
-    inline fun <reified EVENT : Event> handle(crossinline listener: EVENT.(data: DATA) -> Unit) {
-        val dataGetter =
-            requireNotNull(
-                dataGetters.reversed().firstOrNull { (clazz, _) -> EVENT::class.isSubclassOf(clazz) }?.second
-            )
-            { "No data getter for event ${EVENT::class.qualifiedName}." }
-        val filters = filters.filter { EVENT::class.isSubclassOf(it.first) }
-        val filter = { event: EVENT, data: DATA ->
-            filters.all { it.second.invoke(event, data) }
+        val filters = getEventFilters(eventClass)
+        val filter = { event: Event ->
+            filters.all { it.call(this, event) }
         }
-        eventNode.addListener(EVENT::class.java) {
-            val data = dataGetter.invoke(it)
-            if (!filter(it, data)) return@addListener
-            listener.invoke(it, data)
+
+        fun KFunction<*>.callMaybeSuspend(vararg args: Any?) {
+            if (eventHandler.isSuspend) {
+                CoroutineScope(MinestomDispatcher).launch {
+                    callSuspend(*args)
+                }
+            } else {
+                call(*args)
+            }
+        }
+
+        var callEvent = if (eventHandler.parameters.size == 3)
+            if (eventHandler.parameters[2] == getTypeArgument(0))
+                { event: Event ->
+                    eventHandler.callMaybeSuspend(this, event, dataGetter.call(this, event))
+                }
+            else
+                { event: Event ->
+                    @Suppress("UNCHECKED_CAST")
+                    (this as DataStore<DATA, Any>).withData(dataGetter.call(this, event)) {
+                        eventHandler.callMaybeSuspend(this@registerAllEventHandlers, event, this)
+                    }
+                }
+        else { event: Event ->
+            eventHandler.callMaybeSuspend(this, event)
+        }
+
+        eventNode.addListener(eventClass.java) { event ->
+            if (!filter(event)) {
+                return@addListener
+            }
+
+            callEvent(event)
         }
     }
 }

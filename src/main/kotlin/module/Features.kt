@@ -103,7 +103,7 @@ class DummyDataStore<KEY : Comparable<KEY>>(override val singleKey: KEY) : Singl
  *
  * Recommended to be used as the companion object of [DATA] (like [PersistentData.Store]).
  */
-abstract class VolatileDataStore<KEY : Comparable<KEY>, DATA>(
+class VolatileDataStore<KEY : Comparable<KEY>, DATA>(
     private val dataMaker: () -> DATA,
     private val keyMaker: (() -> KEY)? = null,
 ) : DataStore.Direct<KEY, DATA> {
