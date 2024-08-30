@@ -5,11 +5,11 @@ import org.jetbrains.exposed.dao.Entity
 import org.jetbrains.exposed.sql.Table
 
 /**
- * A [CustomColumn] that stores a [Pos].
+ * A [ColumnGroup] that stores a [Pos].
  */
-class PosColumn(table: Table, id: String) : CustomColumn<PosColumn, PosColumn.Accessor>(table, id) {
-    class Accessor(parent: PosColumn, entity: Entity<*>) :
-        CustomColumn.Accessor<Accessor, PosColumn, Pos>(parent, entity) {
+class PosColumnGroup(table: Table, id: String) : ColumnGroup<PosColumnGroup, PosColumnGroup.Accessor>(table, id) {
+    class Accessor(parent: PosColumnGroup, entity: Entity<*>) :
+        ColumnGroup.Accessor<Accessor, PosColumnGroup, Pos>(parent, entity) {
         var x by delegate(parent.x)
         var y by delegate(parent.y)
         var z by delegate(parent.z)
@@ -37,7 +37,7 @@ class PosColumn(table: Table, id: String) : CustomColumn<PosColumn, PosColumn.Ac
 }
 
 /**
- * Shorthand for creating a [PosColumn].
+ * Shorthand for creating a [PosColumnGroup].
  */
-fun Table.pos(id: String) = PosColumn(this, id)
+fun Table.pos(id: String) = PosColumnGroup(this, id)
 

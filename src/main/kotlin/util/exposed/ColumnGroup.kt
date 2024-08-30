@@ -2,17 +2,16 @@ package helio.util.exposed
 
 import org.jetbrains.exposed.dao.Entity
 import org.jetbrains.exposed.sql.Column
-import org.jetbrains.exposed.sql.IColumnType
 import org.jetbrains.exposed.sql.Table
 import kotlin.properties.ReadWriteProperty
 import kotlin.reflect.KProperty
 
 /**
- * Custom column for Exposed's [Table]. Not an actual [IColumnType], just a utility for wrapping a group of columns.
+ * A group of columns for Exposed's [Table]. Not an actual [IColumnType].
  *
- * @sample [ExampleCustomColumn]
+ * @sample [ExampleColumnGroup]
  */
-abstract class CustomColumn<SELF : CustomColumn<SELF, ACCESSOR>, ACCESSOR : CustomColumn.Accessor<ACCESSOR, SELF, *>>(
+abstract class ColumnGroup<SELF : ColumnGroup<SELF, ACCESSOR>, ACCESSOR : ColumnGroup.Accessor<ACCESSOR, SELF, *>>(
     val table: Table,
     val id: String,
 ) {
@@ -21,16 +20,16 @@ abstract class CustomColumn<SELF : CustomColumn<SELF, ACCESSOR>, ACCESSOR : Cust
         get() = this as SELF
 
     /**
-     * Accessor for a given [entity] to access the value(s) of a [CustomColumn] ([parent]).
+     * Accessor for a given [entity] to access the value(s) of a [ColumnGroup] ([parent]).
      */
-    abstract class Accessor<SELF : Accessor<SELF, PARENT, VALUE>, PARENT : CustomColumn<PARENT, SELF>, VALUE>(
+    abstract class Accessor<SELF : Accessor<SELF, PARENT, VALUE>, PARENT : ColumnGroup<PARENT, SELF>, VALUE>(
         val parent: PARENT,
         val entity: Entity<*>
     ) {
         /**
          * Convenience function for creating a property delegate to access the value of a [Column].
          *
-         * @sample [ExampleCustomColumn.Accessor]
+         * @sample [ExampleColumnGroup.Accessor]
          */
         fun <T> delegate(column: Column<T>) = entity.columnDelegate(column)
 
@@ -40,7 +39,7 @@ abstract class CustomColumn<SELF : CustomColumn<SELF, ACCESSOR>, ACCESSOR : Cust
     /**
      * Constructor for the [Accessor].
      *
-     * @sample [ExampleCustomColumn.accessor]
+     * @sample [ExampleColumnGroup.accessor]
      */
     abstract val accessor: (SELF, Entity<*>) -> ACCESSOR
 
@@ -68,10 +67,10 @@ class EntityColumnDelegate<ID : Comparable<ID>, T>(private val entity: Entity<ID
 fun <ID : Comparable<ID>, T> Entity<ID>.columnDelegate(column: Column<T>): EntityColumnDelegate<ID, T> =
     EntityColumnDelegate(this, column)
 
-private class ExampleCustomColumn(table: Table, id: String) :
-    CustomColumn<ExampleCustomColumn, ExampleCustomColumn.Accessor>(table, id) {
-    class Accessor(parent: ExampleCustomColumn, entity: Entity<*>) :
-        CustomColumn.Accessor<Accessor, ExampleCustomColumn, Any>(parent, entity) {
+private class ExampleColumnGroup(table: Table, id: String) :
+    ColumnGroup<ExampleColumnGroup, ExampleColumnGroup.Accessor>(table, id) {
+    class Accessor(parent: ExampleColumnGroup, entity: Entity<*>) :
+        ColumnGroup.Accessor<Accessor, ExampleColumnGroup, Any>(parent, entity) {
         var testColumn1 by delegate(parent.testColumn1)
         var testColumn2 by delegate(parent.testColumn2)
 
