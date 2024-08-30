@@ -7,11 +7,12 @@ import org.jetbrains.exposed.dao.Entity
 import org.jetbrains.exposed.sql.Table
 
 /**
- * A [CustomColumn] that stores an [ItemRepr].
+ * A [ColumnGroup] that stores an [ItemRepr].
  */
-class ItemReprColumn(table: Table, id: String) : CustomColumn<ItemReprColumn, ItemReprColumn.Accessor>(table, id) {
-    class Accessor(parent: ItemReprColumn, entity: Entity<*>) :
-        CustomColumn.Accessor<Accessor, ItemReprColumn, ItemRepr>(parent, entity) {
+class ItemReprColumnGroup(table: Table, id: String) :
+    ColumnGroup<ItemReprColumnGroup, ItemReprColumnGroup.Accessor>(table, id) {
+    class Accessor(parent: ItemReprColumnGroup, entity: Entity<*>) :
+        ColumnGroup.Accessor<Accessor, ItemReprColumnGroup, ItemRepr>(parent, entity) {
         var itemDefId by delegate(parent.itemDefId)
         var itemDataId by delegate(parent.itemDataId)
 
@@ -29,11 +30,11 @@ class ItemReprColumn(table: Table, id: String) : CustomColumn<ItemReprColumn, It
     val itemDataId = table.integer("${id}_data")
 
     /**
-     * A nullable [ItemReprColumn].
+     * A nullable [ItemReprColumnGroup].
      */
-    class Nullable(table: Table, id: String) : CustomColumn<Nullable, Nullable.Accessor>(table, id) {
+    class Nullable(table: Table, id: String) : ColumnGroup<Nullable, Nullable.Accessor>(table, id) {
         class Accessor(parent: Nullable, entity: Entity<*>) :
-            CustomColumn.Accessor<Accessor, Nullable, ItemRepr?>(parent, entity) {
+            ColumnGroup.Accessor<Accessor, Nullable, ItemRepr?>(parent, entity) {
             var itemDefId by delegate(parent.itemDefId)
             var itemDataId by delegate(parent.itemDataId)
 
@@ -61,7 +62,7 @@ class ItemReprColumn(table: Table, id: String) : CustomColumn<ItemReprColumn, It
 }
 
 /**
- * Shorthand for creating an [ItemReprColumn].
+ * Shorthand for creating an [ItemReprColumnGroup].
  */
-fun Table.itemrepr(id: String) = ItemReprColumn(this, id)
+fun Table.itemrepr(id: String) = ItemReprColumnGroup(this, id)
 
