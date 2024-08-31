@@ -1,10 +1,11 @@
 plugins {
     kotlin("jvm") version "2.0.10"
     kotlin("plugin.serialization") version "2.0.10"
+    id("maven-publish")
 }
 
-group = "helio"
-version = "0.0.0"
+group = "io.github.okamt"
+version = "0.0.1"
 
 repositories {
     mavenCentral()
@@ -22,6 +23,7 @@ val kotlinxSerializationVersion = "1.7.1"
 val tinylogVersion = "2.7.0"
 val h2databaseVersion = "2.3.230"
 val classgraphVersion = "4.8.174"
+val kotestVersion = "5.9.1"
 
 dependencies {
     implementation("net.minestom:minestom-snapshots:$minestomVersion")
@@ -51,22 +53,30 @@ dependencies {
 
     implementation("io.github.classgraph:classgraph:$classgraphVersion")
 
-    testImplementation(kotlin("test"))
     implementation(kotlin("reflect"))
+
+    testImplementation("io.kotest:kotest-runner-junit5-jvm:$kotestVersion")
+    testImplementation("io.kotest:kotest-property-jvm:$kotestVersion")
+    testImplementation("io.kotest:kotest-assertions-core-jvm:$kotestVersion")
 }
 
-tasks.test {
+tasks.withType<Test>().configureEach {
     useJUnitPlatform()
 }
+
 kotlin {
     jvmToolchain(21)
 }
 
-tasks.withType<Jar> {
-    manifest {
-        attributes["Main-Class"] = "helio.MainKt"
+publishing {
+    publications {
+        create<MavenPublication>("library") {
+            from(components["java"])
+        }
     }
+}
 
+tasks.withType<Jar> {
     // https://stackoverflow.com/a/71094727
     val dependencies = configurations
         .runtimeClasspath
